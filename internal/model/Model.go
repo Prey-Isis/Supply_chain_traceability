@@ -312,7 +312,7 @@ func GetSupplyHistoryByProductId(productId string) ([]Supply_History, error) {
 		return nil, errors.New("database connection not initialized")
 	}
 
-	query := "SELECT product_id, product_name, node_name, location, action, operation_role, description, create_time FROM supply_history WHERE product_id = ? ORDER BY create_time DESC"
+	query := "SELECT product_id, product_name, node_name, location, action, operation_role, description, create_time FROM supply_history WHERE product_id = ? ORDER BY id ASC"
 
 	rows, err := db.Query(query, productId)
 	if err != nil {
@@ -352,7 +352,7 @@ func GetAllSupplyHistory() ([]Supply_History, error) {
 		return nil, errors.New("database connection not initialized")
 	}
 
-	query := "SELECT product_id, product_name, node_name, location, action, operation_role, description, create_time FROM supply_history ORDER BY create_time DESC"
+	query := "SELECT product_id, product_name, node_name, location, action, operation_role, description, create_time FROM supply_history ORDER BY id ASC"
 
 	rows, err := db.Query(query)
 	if err != nil {
