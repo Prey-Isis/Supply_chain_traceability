@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"supply_chain/middleware"
 	"supply_chain/model"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -24,17 +26,258 @@ const (
 	MaxFieldLength = 25 // 字段最大长度
 )
 
-// ==================== 用户相关处理函数 ====================
+// ==================== 认证相关处理函数 ====================
 
-// 创建用户请求结构
+// RegisterRequest 注册请求结构
+type RegisterRequest struct {
+	UserName string `json:"UserName" binding:"required,max=25"`
+	Account  string `json:"Account" binding:"required,max=25"`
+	Password string `json:"PassWord" binding:"required,max=25"`
+	Role     string `json:"Role" binding:"required,oneof=admin manager user"` // 限定角色范围
+}
+
+// Register 用户注册
+func Register(c *gin.Context) {
+	var req RegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    ErrorCode,
+			Message: "请求参数错误：" + err.Error(),
+			Data:    nil,
+		})
+		return
+	}
+
+	// 检查账号是否已存在
+	existingUser, err := model.GetUserByAccount(req.Account)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    ErrorCode,
+			Message: "检查用户是否存在失败：" + err.Error(),
+			Data:    nil,
+		})
+		return
+	}
+	if existingUser != nil {
+		c.JSON(http.StatusConflict, Response{
+			Code:    ErrorCode,
+			Message: "账号已存在",
+			Data:    nil,
+		})
+		return
+	}
+
+	// 创建用户
+	user := &model.User{
+		UserName: req.UserName,
+		Account:  req.Account,
+		Password: req.Password, // 注意：实际应用中应该对密码进行哈希处理
+		Role:     req.Role,
+	}
+
+	if err := model.CreateUser(user); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    ErrorCode,
+			Message: "注册失败：" + err.Error(),
+			Data:    nil,
+		})
+		return
+	}
+
+	// 注册成功后不返回敏感信息
+	c.JSON(http.StatusOK, Response{
+		Code:    SuccessCode,
+		Message: "注册成功",
+		Data: gin.H{
+			"account":  user.Account,
+			"userName": user.UserName,
+			"role":     user.Role,
+		},
+	})
+}
+
+// LoginRequest 登录请求结构
+type LoginRequest struct {
+	Account  string `json:"Account" binding:"required,max=25"`
+	Password string `json:"PassWord" binding:"required,max=25"`
+}
+
+// LoginResponse 登录响应结构
+type LoginResponse struct {
+	Token     string `json:"token"`
+	Account   string `json:"account"`
+	UserName  string `json:"userName"`
+	Role      string `json:"role"`
+	ExpiresIn int64  `json:"expiresIn"` // token过期时间戳
+}
+
+// Login 用户登录
+func Login(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    ErrorCode,
+			Message: "请求参数错误：" + err.Error(),
+			Data:    nil,
+		})
+		return
+	}
+
+	// 获取用户信息
+	user, err := model.GetUserByAccount(req.Account)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    ErrorCode,
+			Message: "登录失败：" + err.Error(),
+			Data:    nil,
+		})
+		return
+	}
+
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    ErrorCode,
+			Message: "账号或密码错误",
+			Data:    nil,
+		})
+		return
+	}
+
+	// 验证密码（实际应用中应该使用哈希比较）
+	if user.Password != req.Password {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    ErrorCode,
+			Message: "账号或密码错误",
+			Data:    nil,
+		})
+		return
+	}
+
+	// 生成JWT token
+	token, err := middleware.GenerateToken(user.Account, user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    ErrorCode,
+			Message: "生成token失败：" + err.Error(),
+			Data:    nil,
+		})
+		return
+	}
+
+	// 设置cookie（可选）
+	c.SetCookie("token", token, int(middleware.TokenExpire.Seconds()), "/", "", false, true)
+
+	// 返回登录信息
+	c.JSON(http.StatusOK, Response{
+		Code:    SuccessCode,
+		Message: "登录成功",
+		Data: LoginResponse{
+			Token:     token,
+			Account:   user.Account,
+			UserName:  user.UserName,
+			Role:      user.Role,
+			ExpiresIn: time.Now().Add(middleware.TokenExpire).Unix(),
+		},
+	})
+}
+
+// Logout 用户登出
+func Logout(c *gin.Context) {
+	// 清除cookie
+	c.SetCookie("token", "", -1, "/", "", false, true)
+
+	c.JSON(http.StatusOK, Response{
+		Code:    SuccessCode,
+		Message: "登出成功",
+		Data:    nil,
+	})
+}
+
+// RefreshToken 刷新token
+func RefreshToken(c *gin.Context) {
+	// 从请求头获取token
+	tokenString := c.GetHeader("Authorization")
+	if tokenString == "" {
+		tokenString, _ = c.Cookie("token")
+	}
+
+	if tokenString == "" {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    ErrorCode,
+			Message: "请提供token",
+			Data:    nil,
+		})
+		return
+	}
+
+	// 去除Bearer前缀
+	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+	tokenString = strings.TrimSpace(tokenString)
+
+	// 刷新token
+	newToken, err := middleware.RefreshToken(tokenString)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    ErrorCode,
+			Message: "token无效或已过期",
+			Data:    nil,
+		})
+		return
+	}
+
+	// 解析token获取用户信息
+	claims, _ := middleware.ParseToken(newToken)
+
+	c.JSON(http.StatusOK, Response{
+		Code:    SuccessCode,
+		Message: "token刷新成功",
+		Data: gin.H{
+			"token":     newToken,
+			"account":   claims.Account,
+			"role":      claims.Role,
+			"expiresIn": claims.ExpiresAt,
+		},
+	})
+}
+
+// GetCurrentUser 获取当前登录用户信息
+func GetCurrentUser(c *gin.Context) {
+	// 从上下文中获取用户信息（由AuthRequired中间件设置）
+	user, exists := c.Get(middleware.ContextUserKey)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    ErrorCode,
+			Message: "未登录",
+			Data:    nil,
+		})
+		return
+	}
+
+	currentUser := user.(*model.User)
+
+	// 不返回密码等敏感信息
+	c.JSON(http.StatusOK, Response{
+		Code:    SuccessCode,
+		Message: "获取用户信息成功",
+		Data: gin.H{
+			"account":  currentUser.Account,
+			"userName": currentUser.UserName,
+			"role":     currentUser.Role,
+		},
+	})
+}
+
+// ==================== 用户管理相关处理函数（需要权限） ====================
+
+// CreateUserRequest 创建用户请求结构
 type CreateUserRequest struct {
 	UserName string `json:"UserName" binding:"required,max=25"`
 	Account  string `json:"Account" binding:"required,max=25"`
 	Password string `json:"PassWord" binding:"required,max=25"`
-	Role     string `json:"Role" binding:"required,max=25"`
+	Role     string `json:"Role" binding:"required,oneof=admin manager user"`
 }
 
-// CreateUser 创建用户
+// CreateUser 创建用户（管理员功能）
 func CreateUser(c *gin.Context) {
 	var req CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -82,6 +325,9 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 
+	// 不返回密码
+	user.Password = ""
+
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
 		Message: "用户创建成功",
@@ -89,7 +335,7 @@ func CreateUser(c *gin.Context) {
 	})
 }
 
-// GetUser 根据账号获取用户
+// GetUser 根据账号获取用户信息（管理员功能）
 func GetUser(c *gin.Context) {
 	account := strings.TrimSpace(c.Param("account"))
 	if account == "" {
@@ -129,6 +375,9 @@ func GetUser(c *gin.Context) {
 		return
 	}
 
+	// 不返回密码
+	user.Password = ""
+
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
 		Message: "获取用户成功",
@@ -136,7 +385,7 @@ func GetUser(c *gin.Context) {
 	})
 }
 
-// GetUserByName 根据用户名获取用户
+// GetUserByName 根据用户名获取用户（管理员功能）
 func GetUserByName(c *gin.Context) {
 	userName := strings.TrimSpace(c.Query("user_name"))
 	if userName == "" {
@@ -176,6 +425,9 @@ func GetUserByName(c *gin.Context) {
 		return
 	}
 
+	// 不返回密码
+	user.Password = ""
+
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
 		Message: "获取用户成功",
@@ -183,7 +435,7 @@ func GetUserByName(c *gin.Context) {
 	})
 }
 
-// GetAllUsers 获取所有用户
+// GetAllUsers 获取所有用户（管理员功能）
 func GetAllUsers(c *gin.Context) {
 	users, err := model.GetAllUsers()
 	if err != nil {
@@ -193,6 +445,11 @@ func GetAllUsers(c *gin.Context) {
 			Data:    nil,
 		})
 		return
+	}
+
+	// 不返回密码
+	for i := range users {
+		users[i].Password = ""
 	}
 
 	c.JSON(http.StatusOK, Response{
@@ -206,10 +463,10 @@ func GetAllUsers(c *gin.Context) {
 type UpdateUserRequest struct {
 	UserName string `json:"UserName" binding:"required,max=25"`
 	Password string `json:"PassWord" binding:"required,max=25"`
-	Role     string `json:"Role" binding:"required,max=25"`
+	Role     string `json:"Role" binding:"required,oneof=admin manager user"`
 }
 
-// UpdateUser 更新用户信息
+// UpdateUser 更新用户信息（管理员功能）
 func UpdateUser(c *gin.Context) {
 	account := strings.TrimSpace(c.Param("account"))
 	if account == "" {
@@ -276,6 +533,9 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
+	// 不返回密码
+	user.Password = ""
+
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
 		Message: "用户更新成功",
@@ -283,7 +543,7 @@ func UpdateUser(c *gin.Context) {
 	})
 }
 
-// DeleteUser 删除用户
+// DeleteUser 删除用户（管理员功能）
 func DeleteUser(c *gin.Context) {
 	account := strings.TrimSpace(c.Param("account"))
 	if account == "" {
@@ -328,7 +588,7 @@ func DeleteUser(c *gin.Context) {
 	})
 }
 
-// ==================== 产品相关处理函数 ====================
+// ==================== 以下产品相关处理函数保持不变 ====================
 
 // 创建产品请求结构
 type CreateProductRequest struct {
