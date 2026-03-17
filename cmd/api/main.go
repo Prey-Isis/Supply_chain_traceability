@@ -59,7 +59,7 @@ func main() {
 	public := r.Group("/api/v1")
 	{
 		// 认证相关
-		public.POST("/register", router.Register)
+		// public.POST("/register", router.Register)    // 不开放用户注册，仅管理员可创建账户
 		public.POST("/login", router.Login)
 		public.POST("/refresh-token", router.RefreshToken)
 
