@@ -16,7 +16,7 @@ import (
 
 func main() {
 	// 设置运行模式
-	gin.SetMode(gin.ReleaseMode) // 生产模式，开发时可改为 gin.DebugMode
+	gin.SetMode(gin.DebugMode) // 生产模式 gin.ReleaseMode，开发时可改为 gin.DebugMode
 
 	// 创建 Gin 引擎
 	r := gin.New()
