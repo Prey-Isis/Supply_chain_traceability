@@ -4,41 +4,42 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"supply_chain/config"
-	"supply_chain/pkg/utils"
+	"main/config"
+	"main/pkg/utils"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
 type User struct {
-	user_name   string `json:"UserName"`
-	account     string `json:"Account"`
-	password    string `json:"PassWord"`
-	role        string `json:"Role"`
-	create_time string `json:"Create_Time"`
-	update_time string `json:"Update_Time"`
+	UserName    string `json:"UserName"`
+	Account     string `json:"Account"`
+	PassWord    string `json:"PassWord"`
+	Role        string `json:"Role"`
+	Create_Time string `json:"Create_Time"`
+	Update_Time string `json:"Update_Time"`
 }
 
 type Supply_History struct {
-	product_id     string `json:"Product_Id"`
-	product_name   string `json:"Product_Name"`
-	node_name      string `json:"Node_Name"`
-	location       string `json:"Location"`
-	action         string `json:"Action"`
-	operation_role string `json:"Operation_Role"`
-	description    string `json:"Description"`
-	create_time    string `json:"Create_Time"`
+	Product_Id     string `json:"Product_Id"`
+	Product_Name   string `json:"Product_Name"`
+	Node_Name      string `json:"Node_Name"`
+	Location       string `json:"Location"`
+	Action         string `json:"Action"`
+	Operation_Role string `json:"Operation_Role"`
+	Description    string `json:"Description"`
+	Create_Time    string `json:"Create_Time"`
 }
 
 type Product struct {
-	product_id     string           `json:"Product_Id"`
-	name           string           `json:"Name"`
-	current_holder string           `json:"Current_Holder"`
-	status         string           `json:"Status"`
-	create_time    string           `json:"Create_Time"`
-	update_time    string           `json:"Update_Time"`
-	supply_history []Supply_History `json:"Supply_History"`
+	Product_Id     string           `json:"Product_Id"`
+	Name           string           `json:"Name"`
+	Current_Holder string           `json:"Current_Holder"`
+	Status         string           `json:"Status"`
+	Create_Time    string           `json:"Create_Time"`
+	Update_Time    string           `json:"Update_Time"`
+	Supply_History []Supply_History `json:"Supply_History"`
 }
 
 var cfg *config.Config = utils.InitConfig("")
@@ -112,10 +113,10 @@ func CreateUser(user *User) error {
 	query := "INSERT INTO user (user_name, account, password, role) VALUES (?, ?, ?, ?)"
 
 	_, err := db.Exec(query,
-		user.user_name,
-		user.account,
-		user.password,
-		user.role,
+		user.UserName,
+		user.Account,
+		user.PassWord,
+		user.Role,
 	)
 
 	if err != nil {
@@ -135,12 +136,12 @@ func GetUserByAccount(account string) (*User, error) {
 	query := "SELECT user_name, account, password, role, create_time, update_time FROM user WHERE account = ?"
 
 	err := db.QueryRow(query, account).Scan(
-		&user.user_name,
-		&user.account,
-		&user.password,
-		&user.role,
-		&user.create_time,
-		&user.update_time,
+		&user.UserName,
+		&user.Account,
+		&user.PassWord,
+		&user.Role,
+		&user.Create_Time,
+		&user.Update_Time,
 	)
 
 	if err == sql.ErrNoRows {
@@ -164,12 +165,12 @@ func GetUserByName(userName string) (*User, error) {
 	query := "SELECT user_name, account, password, role, create_time, update_time FROM user WHERE user_name = ?"
 
 	err := db.QueryRow(query, userName).Scan(
-		&user.user_name,
-		&user.account,
-		&user.password,
-		&user.role,
-		&user.create_time,
-		&user.update_time,
+		&user.UserName,
+		&user.Account,
+		&user.PassWord,
+		&user.Role,
+		&user.Create_Time,
+		&user.Update_Time,
 	)
 
 	if err == sql.ErrNoRows {
@@ -201,12 +202,12 @@ func GetAllUsers() ([]User, error) {
 	for rows.Next() {
 		var user User
 		err := rows.Scan(
-			&user.user_name,
-			&user.account,
-			&user.password,
-			&user.role,
-			&user.create_time,
-			&user.update_time,
+			&user.UserName,
+			&user.Account,
+			&user.PassWord,
+			&user.Role,
+			&user.Create_Time,
+			&user.Update_Time,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan user row: %w", err)
@@ -230,10 +231,10 @@ func UpdateUser(user *User) error {
 	query := "UPDATE user SET user_name = ?, password = ?, role = ? WHERE account = ?"
 
 	result, err := db.Exec(query,
-		user.user_name,
-		user.password,
-		user.role,
-		user.account,
+		user.UserName,
+		user.PassWord,
+		user.Role,
+		user.Account,
 	)
 
 	if err != nil {
@@ -285,18 +286,18 @@ func CreateSupplyHistory(history *Supply_History) error {
 	}
 
 	// 由于数据库有外键约束，不需要手动检查产品是否存在
-	// 如果product_id不存在，数据库会返回外键约束错误
+	// 如果Product_Id不存在，数据库会返回外键约束错误
 
 	query := "INSERT INTO supply_history (product_id, product_name, node_name, location, action, operation_role, description) VALUES (?, ?, ?, ?, ?, ?, ?)"
 
 	_, err := db.Exec(query,
-		history.product_id,
-		history.product_name,
-		history.node_name,
-		history.location,
-		history.action,
-		history.operation_role,
-		history.description,
+		history.Product_Id,
+		history.Product_Name,
+		history.Node_Name,
+		history.Location,
+		history.Action,
+		history.Operation_Role,
+		history.Description,
 	)
 
 	if err != nil {
@@ -324,14 +325,14 @@ func GetSupplyHistoryByProductId(productId string) ([]Supply_History, error) {
 	for rows.Next() {
 		var history Supply_History
 		err := rows.Scan(
-			&history.product_id,
-			&history.product_name,
-			&history.node_name,
-			&history.location,
-			&history.action,
-			&history.operation_role,
-			&history.description,
-			&history.create_time,
+			&history.Product_Id,
+			&history.Product_Name,
+			&history.Node_Name,
+			&history.Location,
+			&history.Action,
+			&history.Operation_Role,
+			&history.Description,
+			&history.Create_Time,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan history row: %w", err)
@@ -364,14 +365,14 @@ func GetAllSupplyHistory() ([]Supply_History, error) {
 	for rows.Next() {
 		var history Supply_History
 		err := rows.Scan(
-			&history.product_id,
-			&history.product_name,
-			&history.node_name,
-			&history.location,
-			&history.action,
-			&history.operation_role,
-			&history.description,
-			&history.create_time,
+			&history.Product_Id,
+			&history.Product_Name,
+			&history.Node_Name,
+			&history.Location,
+			&history.Action,
+			&history.Operation_Role,
+			&history.Description,
+			&history.Create_Time,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan history row: %w", err)
@@ -433,10 +434,10 @@ func CreateProduct(product *Product) error {
 	query := "INSERT INTO product (product_id, name, current_holder, status) VALUES (?, ?, ?, ?)"
 
 	_, err = tx.Exec(query,
-		product.product_id,
-		product.name,
-		product.current_holder,
-		product.status,
+		product.Product_Id,
+		product.Name,
+		product.Current_Holder,
+		product.Status,
 	)
 
 	if err != nil {
@@ -444,20 +445,20 @@ func CreateProduct(product *Product) error {
 	}
 
 	// 如果有历史记录，一并创建
-	if len(product.supply_history) > 0 {
-		for i := range product.supply_history {
-			product.supply_history[i].product_id = product.product_id
+	if len(product.Supply_History) > 0 {
+		for i := range product.Supply_History {
+			product.Supply_History[i].Product_Id = product.Product_Id
 
 			historyQuery := "INSERT INTO supply_history (product_id, product_name, node_name, location, action, operation_role, description) VALUES (?, ?, ?, ?, ?, ?, ?)"
 
 			_, err = tx.Exec(historyQuery,
-				product.supply_history[i].product_id,
-				product.supply_history[i].product_name,
-				product.supply_history[i].node_name,
-				product.supply_history[i].location,
-				product.supply_history[i].action,
-				product.supply_history[i].operation_role,
-				product.supply_history[i].description,
+				product.Supply_History[i].Product_Id,
+				product.Supply_History[i].Product_Name,
+				product.Supply_History[i].Node_Name,
+				product.Supply_History[i].Location,
+				product.Supply_History[i].Action,
+				product.Supply_History[i].Operation_Role,
+				product.Supply_History[i].Description,
 			)
 
 			if err != nil {
@@ -482,18 +483,18 @@ func GetProductById(productId string) (*Product, error) {
 	}
 
 	product := &Product{
-		product_id: productId,
+		Product_Id: productId,
 	}
 
 	// 获取产品基本信息
 	query := "SELECT name, current_holder, status, create_time, update_time FROM product WHERE product_id = ?"
 
 	err := db.QueryRow(query, productId).Scan(
-		&product.name,
-		&product.current_holder,
-		&product.status,
-		&product.create_time,
-		&product.update_time,
+		&product.Name,
+		&product.Current_Holder,
+		&product.Status,
+		&product.Create_Time,
+		&product.Update_Time,
 	)
 
 	if err == sql.ErrNoRows {
@@ -509,7 +510,7 @@ func GetProductById(productId string) (*Product, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get product history: %w", err)
 	}
-	product.supply_history = histories
+	product.Supply_History = histories
 
 	return product, nil
 }
@@ -532,23 +533,23 @@ func GetAllProducts() ([]Product, error) {
 	for rows.Next() {
 		var product Product
 		err := rows.Scan(
-			&product.product_id,
-			&product.name,
-			&product.current_holder,
-			&product.status,
-			&product.create_time,
-			&product.update_time,
+			&product.Product_Id,
+			&product.Name,
+			&product.Current_Holder,
+			&product.Status,
+			&product.Create_Time,
+			&product.Update_Time,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan product row: %w", err)
 		}
 
 		// 获取每个产品的历史记录
-		histories, err := GetSupplyHistoryByProductId(product.product_id)
+		histories, err := GetSupplyHistoryByProductId(product.Product_Id)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get history for product %s: %w", product.product_id, err)
+			return nil, fmt.Errorf("failed to get history for product %s: %w", product.Product_Id, err)
 		}
-		product.supply_history = histories
+		product.Supply_History = histories
 
 		products = append(products, product)
 	}
@@ -569,10 +570,10 @@ func UpdateProduct(product *Product) error {
 	query := "UPDATE product SET name = ?, current_holder = ?, status = ? WHERE product_id = ?"
 
 	result, err := db.Exec(query,
-		product.name,
-		product.current_holder,
-		product.status,
-		product.product_id,
+		product.Name,
+		product.Current_Holder,
+		product.Status,
+		product.Product_Id,
 	)
 
 	if err != nil {
@@ -643,7 +644,7 @@ func DeleteProduct(productId string) error {
 	return nil
 }
 
-// BatchCreateSupplyHistory 批量创建供应链历史记录
+// BatchCreateSupplyHistory 智能批量创建供应链历史记录
 func BatchCreateSupplyHistory(histories []Supply_History) error {
 	if db == nil {
 		return errors.New("database connection not initialized")
@@ -653,45 +654,87 @@ func BatchCreateSupplyHistory(histories []Supply_History) error {
 		return nil
 	}
 
-	// 开启事务
+	// 根据数据量选择最佳策略
+	if len(histories) < 50 {
+		// 小数据量：使用事务+循环（你原来的方法）
+		return batchCreateWithTransaction(histories)
+	} else {
+		// 大数据量：使用单条SQL批量插入
+		return batchCreateWithSingleSQL(histories)
+	}
+}
+
+// 小数据量使用事务方式
+func batchCreateWithTransaction(histories []Supply_History) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
+
+	var txErr error
 	defer func() {
-		if err != nil {
+		if txErr != nil {
 			tx.Rollback()
 		}
 	}()
 
-	// 准备批量插入语句
 	query := "INSERT INTO supply_history (product_id, product_name, node_name, location, action, operation_role, description) VALUES (?, ?, ?, ?, ?, ?, ?)"
 	stmt, err := tx.Prepare(query)
 	if err != nil {
+		txErr = err
 		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
 	defer stmt.Close()
 
-	// 批量插入
 	for _, history := range histories {
 		_, err = stmt.Exec(
-			history.product_id,
-			history.product_name,
-			history.node_name,
-			history.location,
-			history.action,
-			history.operation_role,
-			history.description,
+			history.Product_Id,
+			history.Product_Name,
+			history.Node_Name,
+			history.Location,
+			history.Action,
+			history.Operation_Role,
+			history.Description,
 		)
 		if err != nil {
-			return fmt.Errorf("failed to batch create supply history: %w", err)
+			txErr = err
+			return fmt.Errorf("failed to create supply history: %w", err)
 		}
 	}
 
-	// 提交事务
 	err = tx.Commit()
 	if err != nil {
+		txErr = err
 		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// 大数据量使用单条SQL
+func batchCreateWithSingleSQL(histories []Supply_History) error {
+	valueStrings := make([]string, 0, len(histories))
+	valueArgs := make([]interface{}, 0, len(histories)*7)
+
+	for _, history := range histories {
+		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?)")
+		valueArgs = append(valueArgs,
+			history.Product_Id,
+			history.Product_Name,
+			history.Node_Name,
+			history.Location,
+			history.Action,
+			history.Operation_Role,
+			history.Description,
+		)
+	}
+
+	query := fmt.Sprintf("INSERT INTO supply_history (product_id, product_name, node_name, location, action, operation_role, description) VALUES %s",
+		strings.Join(valueStrings, ","))
+
+	_, err := db.Exec(query, valueArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to batch create supply history: %w", err)
 	}
 
 	return nil

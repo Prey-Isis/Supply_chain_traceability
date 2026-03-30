@@ -4,7 +4,7 @@ package utils
 import (
 	"log"
 
-	"supply_chain/config"
+	"main/config"
 )
 
 // InitConfig 初始化配置

@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"log"
+	"main/internal/model"
+	"main/internal/router"
 	"net/http"
 	"strings"
-	"supply_chain/model"
-	"supply_chain/router"
 	"time"
 
 	"github.com/gin-gonic/gin"

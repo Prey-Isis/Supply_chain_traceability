@@ -2,10 +2,10 @@ package router
 
 import (
 	"errors"
+	"main/internal/model"
+	"main/jwt"
 	"net/http"
 	"strings"
-	"supply_chain/middleware"
-	"supply_chain/model"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +32,7 @@ const (
 type RegisterRequest struct {
 	UserName string `json:"UserName" binding:"required,max=25"`
 	Account  string `json:"Account" binding:"required,max=25"`
-	Password string `json:"PassWord" binding:"required,max=25"`
+	PassWord string `json:"PassWord" binding:"required,max=25"`
 	Role     string `json:"Role" binding:"required,oneof=admin manager user"` // 限定角色范围
 }
 
@@ -71,7 +71,7 @@ func Register(c *gin.Context) {
 	user := &model.User{
 		UserName: req.UserName,
 		Account:  req.Account,
-		Password: req.Password, // 注意：实际应用中应该对密码进行哈希处理
+		PassWord: req.PassWord, // 注意：实际应用中应该对密码进行哈希处理
 		Role:     req.Role,
 	}
 
@@ -99,7 +99,7 @@ func Register(c *gin.Context) {
 // LoginRequest 登录请求结构
 type LoginRequest struct {
 	Account  string `json:"Account" binding:"required,max=25"`
-	Password string `json:"PassWord" binding:"required,max=25"`
+	PassWord string `json:"PassWord" binding:"required,max=25"`
 }
 
 // LoginResponse 登录响应结构
@@ -144,7 +144,7 @@ func Login(c *gin.Context) {
 	}
 
 	// 验证密码（实际应用中应该使用哈希比较）
-	if user.Password != req.Password {
+	if user.PassWord != req.PassWord {
 		c.JSON(http.StatusUnauthorized, Response{
 			Code:    ErrorCode,
 			Message: "账号或密码错误",
@@ -154,7 +154,7 @@ func Login(c *gin.Context) {
 	}
 
 	// 生成JWT token
-	token, err := middleware.GenerateToken(user.Account, user.Role)
+	token, err := jwt.GenerateToken(user.Account, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    ErrorCode,
@@ -165,7 +165,7 @@ func Login(c *gin.Context) {
 	}
 
 	// 设置cookie（可选）
-	c.SetCookie("token", token, int(middleware.TokenExpire.Seconds()), "/", "", false, true)
+	c.SetCookie("token", token, int(jwt.TokenExpire.Seconds()), "/", "", false, true)
 
 	// 返回登录信息
 	c.JSON(http.StatusOK, Response{
@@ -176,7 +176,7 @@ func Login(c *gin.Context) {
 			Account:   user.Account,
 			UserName:  user.UserName,
 			Role:      user.Role,
-			ExpiresIn: time.Now().Add(middleware.TokenExpire).Unix(),
+			ExpiresIn: time.Now().Add(jwt.TokenExpire).Unix(),
 		},
 	})
 }
@@ -215,7 +215,7 @@ func RefreshToken(c *gin.Context) {
 	tokenString = strings.TrimSpace(tokenString)
 
 	// 刷新token
-	newToken, err := middleware.RefreshToken(tokenString)
+	newToken, err := jwt.RefreshToken(tokenString)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, Response{
 			Code:    ErrorCode,
@@ -226,7 +226,7 @@ func RefreshToken(c *gin.Context) {
 	}
 
 	// 解析token获取用户信息
-	claims, _ := middleware.ParseToken(newToken)
+	claims, _ := jwt.ParseToken(newToken)
 
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
@@ -243,7 +243,7 @@ func RefreshToken(c *gin.Context) {
 // GetCurrentUser 获取当前登录用户信息
 func GetCurrentUser(c *gin.Context) {
 	// 从上下文中获取用户信息（由AuthRequired中间件设置）
-	user, exists := c.Get(middleware.ContextUserKey)
+	user, exists := c.Get(jwt.ContextUserKey)
 	if !exists {
 		c.JSON(http.StatusUnauthorized, Response{
 			Code:    ErrorCode,
@@ -273,7 +273,7 @@ func GetCurrentUser(c *gin.Context) {
 type CreateUserRequest struct {
 	UserName string `json:"UserName" binding:"required,max=25"`
 	Account  string `json:"Account" binding:"required,max=25"`
-	Password string `json:"PassWord" binding:"required,max=25"`
+	PassWord string `json:"PassWord" binding:"required,max=25"`
 	Role     string `json:"Role" binding:"required,oneof=admin manager user"`
 }
 
@@ -312,7 +312,7 @@ func CreateUser(c *gin.Context) {
 	user := &model.User{
 		UserName: req.UserName,
 		Account:  req.Account,
-		Password: req.Password,
+		PassWord: req.PassWord,
 		Role:     req.Role,
 	}
 
@@ -326,7 +326,7 @@ func CreateUser(c *gin.Context) {
 	}
 
 	// 不返回密码
-	user.Password = ""
+	user.PassWord = ""
 
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
@@ -376,7 +376,7 @@ func GetUser(c *gin.Context) {
 	}
 
 	// 不返回密码
-	user.Password = ""
+	user.PassWord = ""
 
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
@@ -426,7 +426,7 @@ func GetUserByName(c *gin.Context) {
 	}
 
 	// 不返回密码
-	user.Password = ""
+	user.PassWord = ""
 
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
@@ -449,7 +449,7 @@ func GetAllUsers(c *gin.Context) {
 
 	// 不返回密码
 	for i := range users {
-		users[i].Password = ""
+		users[i].PassWord = ""
 	}
 
 	c.JSON(http.StatusOK, Response{
@@ -462,7 +462,7 @@ func GetAllUsers(c *gin.Context) {
 // 更新用户请求结构
 type UpdateUserRequest struct {
 	UserName string `json:"UserName" binding:"required,max=25"`
-	Password string `json:"PassWord" binding:"required,max=25"`
+	PassWord string `json:"PassWord" binding:"required,max=25"`
 	Role     string `json:"Role" binding:"required,oneof=admin manager user"`
 }
 
@@ -520,7 +520,7 @@ func UpdateUser(c *gin.Context) {
 	user := &model.User{
 		UserName: req.UserName,
 		Account:  account,
-		Password: req.Password,
+		PassWord: req.PassWord,
 		Role:     req.Role,
 	}
 
@@ -534,7 +534,7 @@ func UpdateUser(c *gin.Context) {
 	}
 
 	// 不返回密码
-	user.Password = ""
+	user.PassWord = ""
 
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
@@ -592,22 +592,22 @@ func DeleteUser(c *gin.Context) {
 
 // 创建产品请求结构
 type CreateProductRequest struct {
-	ProductId     string                 `json:"Product_Id" binding:"required,max=25"`
-	Name          string                 `json:"Name" binding:"required,max=25"`
-	CurrentHolder string                 `json:"Current_Holder" binding:"required,max=25"`
-	Status        string                 `json:"Status" binding:"required,max=25"`
-	SupplyHistory []model.Supply_History `json:"Supply_History"`
+	Product_Id     string                 `json:"Product_Id" binding:"required,max=25"`
+	Name           string                 `json:"Name" binding:"required,max=25"`
+	Current_Holder string                 `json:"Current_Holder" binding:"required,max=25"`
+	Status         string                 `json:"Status" binding:"required,max=25"`
+	Supply_History []model.Supply_History `json:"Supply_History"`
 }
 
-// validateSupplyHistory 验证供应链历史记录数据长度
-func validateSupplyHistory(history *model.Supply_History) error {
-	if len(history.ProductId) > MaxFieldLength {
+// validateSupply_History 验证供应链历史记录数据长度
+func validateSupply_History(history *model.Supply_History) error {
+	if len(history.Product_Id) > MaxFieldLength {
 		return errors.New("product_id长度不能超过25个字符")
 	}
-	if len(history.ProductName) > MaxFieldLength {
+	if len(history.Product_Name) > MaxFieldLength {
 		return errors.New("product_name长度不能超过25个字符")
 	}
-	if len(history.NodeName) > MaxFieldLength {
+	if len(history.Node_Name) > MaxFieldLength {
 		return errors.New("node_name长度不能超过25个字符")
 	}
 	if len(history.Location) > MaxFieldLength {
@@ -616,7 +616,7 @@ func validateSupplyHistory(history *model.Supply_History) error {
 	if len(history.Action) > MaxFieldLength {
 		return errors.New("action长度不能超过25个字符")
 	}
-	if len(history.OperationRole) > MaxFieldLength {
+	if len(history.Operation_Role) > MaxFieldLength {
 		return errors.New("operation_role长度不能超过25个字符")
 	}
 	if len(history.Description) > MaxFieldLength {
@@ -638,7 +638,7 @@ func CreateProduct(c *gin.Context) {
 	}
 
 	// 检查产品是否已存在
-	existingProduct, err := model.GetProductById(req.ProductId)
+	existingProduct, err := model.GetProductById(req.Product_Id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    ErrorCode,
@@ -657,8 +657,8 @@ func CreateProduct(c *gin.Context) {
 	}
 
 	// 验证历史记录中的数据长度
-	for _, history := range req.SupplyHistory {
-		if err := validateSupplyHistory(&history); err != nil {
+	for _, history := range req.Supply_History {
+		if err := validateSupply_History(&history); err != nil {
 			c.JSON(http.StatusBadRequest, Response{
 				Code:    ErrorCode,
 				Message: "历史记录数据验证失败：" + err.Error(),
@@ -670,11 +670,11 @@ func CreateProduct(c *gin.Context) {
 
 	// 创建产品
 	product := &model.Product{
-		ProductId:     req.ProductId,
-		Name:          req.Name,
-		CurrentHolder: req.CurrentHolder,
-		Status:        req.Status,
-		SupplyHistory: req.SupplyHistory,
+		Product_Id:     req.Product_Id,
+		Name:           req.Name,
+		Current_Holder: req.Current_Holder,
+		Status:         req.Status,
+		Supply_History: req.Supply_History,
 	}
 
 	if err := model.CreateProduct(product); err != nil {
@@ -695,8 +695,8 @@ func CreateProduct(c *gin.Context) {
 
 // GetProduct 根据ID获取产品
 func GetProduct(c *gin.Context) {
-	productId := strings.TrimSpace(c.Param("product_id"))
-	if productId == "" {
+	Product_Id := strings.TrimSpace(c.Param("product_id"))
+	if Product_Id == "" {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID不能为空",
@@ -705,7 +705,7 @@ func GetProduct(c *gin.Context) {
 		return
 	}
 
-	if len(productId) > MaxFieldLength {
+	if len(Product_Id) > MaxFieldLength {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID长度不能超过25个字符",
@@ -714,7 +714,7 @@ func GetProduct(c *gin.Context) {
 		return
 	}
 
-	product, err := model.GetProductById(productId)
+	product, err := model.GetProductById(Product_Id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    ErrorCode,
@@ -761,15 +761,15 @@ func GetAllProducts(c *gin.Context) {
 
 // 更新产品请求结构
 type UpdateProductRequest struct {
-	Name          string `json:"Name" binding:"required,max=25"`
-	CurrentHolder string `json:"Current_Holder" binding:"required,max=25"`
-	Status        string `json:"Status" binding:"required,max=25"`
+	Name           string `json:"Name" binding:"required,max=25"`
+	Current_Holder string `json:"Current_Holder" binding:"required,max=25"`
+	Status         string `json:"Status" binding:"required,max=25"`
 }
 
 // UpdateProduct 更新产品信息
 func UpdateProduct(c *gin.Context) {
-	productId := strings.TrimSpace(c.Param("product_id"))
-	if productId == "" {
+	Product_Id := strings.TrimSpace(c.Param("product_id"))
+	if Product_Id == "" {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID不能为空",
@@ -778,7 +778,7 @@ func UpdateProduct(c *gin.Context) {
 		return
 	}
 
-	if len(productId) > MaxFieldLength {
+	if len(Product_Id) > MaxFieldLength {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID长度不能超过25个字符",
@@ -798,7 +798,7 @@ func UpdateProduct(c *gin.Context) {
 	}
 
 	// 检查产品是否存在
-	existingProduct, err := model.GetProductById(productId)
+	existingProduct, err := model.GetProductById(Product_Id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    ErrorCode,
@@ -818,10 +818,10 @@ func UpdateProduct(c *gin.Context) {
 
 	// 更新产品
 	product := &model.Product{
-		ProductId:     productId,
-		Name:          req.Name,
-		CurrentHolder: req.CurrentHolder,
-		Status:        req.Status,
+		Product_Id:     Product_Id,
+		Name:           req.Name,
+		Current_Holder: req.Current_Holder,
+		Status:         req.Status,
 	}
 
 	if err := model.UpdateProduct(product); err != nil {
@@ -847,8 +847,8 @@ type UpdateProductStatusRequest struct {
 
 // UpdateProductStatus 更新产品状态
 func UpdateProductStatus(c *gin.Context) {
-	productId := strings.TrimSpace(c.Param("product_id"))
-	if productId == "" {
+	Product_Id := strings.TrimSpace(c.Param("product_id"))
+	if Product_Id == "" {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID不能为空",
@@ -857,7 +857,7 @@ func UpdateProductStatus(c *gin.Context) {
 		return
 	}
 
-	if len(productId) > MaxFieldLength {
+	if len(Product_Id) > MaxFieldLength {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID长度不能超过25个字符",
@@ -876,7 +876,7 @@ func UpdateProductStatus(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpdateProductStatus(productId, req.Status); err != nil {
+	if err := model.UpdateProductStatus(Product_Id, req.Status); err != nil {
 		if err.Error() == "product not found" {
 			c.JSON(http.StatusNotFound, Response{
 				Code:    ErrorCode,
@@ -896,14 +896,14 @@ func UpdateProductStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
 		Message: "产品状态更新成功",
-		Data:    gin.H{"product_id": productId, "status": req.Status},
+		Data:    gin.H{"product_id": Product_Id, "status": req.Status},
 	})
 }
 
 // DeleteProduct 删除产品
 func DeleteProduct(c *gin.Context) {
-	productId := strings.TrimSpace(c.Param("product_id"))
-	if productId == "" {
+	Product_Id := strings.TrimSpace(c.Param("product_id"))
+	if Product_Id == "" {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID不能为空",
@@ -912,7 +912,7 @@ func DeleteProduct(c *gin.Context) {
 		return
 	}
 
-	if len(productId) > MaxFieldLength {
+	if len(Product_Id) > MaxFieldLength {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID长度不能超过25个字符",
@@ -921,7 +921,7 @@ func DeleteProduct(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeleteProduct(productId); err != nil {
+	if err := model.DeleteProduct(Product_Id); err != nil {
 		if err.Error() == "product not found" {
 			c.JSON(http.StatusNotFound, Response{
 				Code:    ErrorCode,
@@ -948,19 +948,19 @@ func DeleteProduct(c *gin.Context) {
 // ==================== 供应链历史相关处理函数 ====================
 
 // 创建供应链历史请求结构
-type CreateSupplyHistoryRequest struct {
-	ProductId     string `json:"Product_Id" binding:"required,max=25"`
-	ProductName   string `json:"Product_Name" binding:"required,max=25"`
-	NodeName      string `json:"Node_Name" binding:"required,max=25"`
-	Location      string `json:"Location" binding:"required,max=25"`
-	Action        string `json:"Action" binding:"required,max=25"`
-	OperationRole string `json:"Operation_Role" binding:"required,max=25"`
-	Description   string `json:"Description" binding:"max=25"`
+type CreateSupply_HistoryRequest struct {
+	Product_Id     string `json:"Product_Id" binding:"required,max=25"`
+	Product_Name   string `json:"Product_Name" binding:"required,max=25"`
+	Node_Name      string `json:"Node_Name" binding:"required,max=25"`
+	Location       string `json:"Location" binding:"required,max=25"`
+	Action         string `json:"Action" binding:"required,max=25"`
+	Operation_Role string `json:"Operation_Role" binding:"required,max=25"`
+	Description    string `json:"Description" binding:"max=25"`
 }
 
-// CreateSupplyHistory 创建供应链历史记录
-func CreateSupplyHistory(c *gin.Context) {
-	var req CreateSupplyHistoryRequest
+// CreateSupply_History 创建供应链历史记录
+func CreateSupply_History(c *gin.Context) {
+	var req CreateSupply_HistoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
@@ -971,7 +971,7 @@ func CreateSupplyHistory(c *gin.Context) {
 	}
 
 	// 检查产品是否存在
-	product, err := model.GetProductById(req.ProductId)
+	product, err := model.GetProductById(req.Product_Id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    ErrorCode,
@@ -990,13 +990,13 @@ func CreateSupplyHistory(c *gin.Context) {
 	}
 
 	history := &model.Supply_History{
-		ProductId:     req.ProductId,
-		ProductName:   req.ProductName,
-		NodeName:      req.NodeName,
-		Location:      req.Location,
-		Action:        req.Action,
-		OperationRole: req.OperationRole,
-		Description:   req.Description,
+		Product_Id:     req.Product_Id,
+		Product_Name:   req.Product_Name,
+		Node_Name:      req.Node_Name,
+		Location:       req.Location,
+		Action:         req.Action,
+		Operation_Role: req.Operation_Role,
+		Description:    req.Description,
 	}
 
 	if err := model.CreateSupplyHistory(history); err != nil {
@@ -1015,10 +1015,10 @@ func CreateSupplyHistory(c *gin.Context) {
 	})
 }
 
-// GetSupplyHistoryByProduct 根据产品ID获取历史记录
-func GetSupplyHistoryByProduct(c *gin.Context) {
-	productId := strings.TrimSpace(c.Param("product_id"))
-	if productId == "" {
+// GetSupply_HistoryByProduct 根据产品ID获取历史记录
+func GetSupply_HistoryByProduct(c *gin.Context) {
+	Product_Id := strings.TrimSpace(c.Param("product_id"))
+	if Product_Id == "" {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID不能为空",
@@ -1027,7 +1027,7 @@ func GetSupplyHistoryByProduct(c *gin.Context) {
 		return
 	}
 
-	if len(productId) > MaxFieldLength {
+	if len(Product_Id) > MaxFieldLength {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
 			Message: "产品ID长度不能超过25个字符",
@@ -1036,7 +1036,7 @@ func GetSupplyHistoryByProduct(c *gin.Context) {
 		return
 	}
 
-	histories, err := model.GetSupplyHistoryByProductId(productId)
+	histories, err := model.GetSupplyHistoryByProductId(Product_Id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    ErrorCode,
@@ -1053,8 +1053,8 @@ func GetSupplyHistoryByProduct(c *gin.Context) {
 	})
 }
 
-// GetAllSupplyHistory 获取所有供应链历史记录
-func GetAllSupplyHistory(c *gin.Context) {
+// GetAllSupply_History 获取所有供应链历史记录
+func GetAllSupply_History(c *gin.Context) {
 	histories, err := model.GetAllSupplyHistory()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
@@ -1073,14 +1073,14 @@ func GetAllSupplyHistory(c *gin.Context) {
 }
 
 // 删除供应链历史请求结构
-type DeleteSupplyHistoryRequest struct {
-	ProductId  string `json:"Product_Id" binding:"required,max=25"`
+type DeleteSupply_HistoryRequest struct {
+	Product_Id string `json:"Product_Id" binding:"required,max=25"`
 	CreateTime string `json:"Create_Time" binding:"required"`
 }
 
-// DeleteSupplyHistory 删除指定的历史记录
-func DeleteSupplyHistory(c *gin.Context) {
-	var req DeleteSupplyHistoryRequest
+// DeleteSupply_History 删除指定的历史记录
+func DeleteSupply_History(c *gin.Context) {
+	var req DeleteSupply_HistoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
@@ -1090,7 +1090,7 @@ func DeleteSupplyHistory(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeleteSupplyHistory(req.ProductId, req.CreateTime); err != nil {
+	if err := model.DeleteSupplyHistory(req.Product_Id, req.CreateTime); err != nil {
 		if err.Error() == "supply history not found" {
 			c.JSON(http.StatusNotFound, Response{
 				Code:    ErrorCode,
@@ -1114,14 +1114,14 @@ func DeleteSupplyHistory(c *gin.Context) {
 	})
 }
 
-// BatchCreateSupplyHistoryRequest 批量创建供应链历史请求结构
-type BatchCreateSupplyHistoryRequest struct {
+// BatchCreateSupply_HistoryRequest 批量创建供应链历史请求结构
+type BatchCreateSupply_HistoryRequest struct {
 	Histories []model.Supply_History `json:"histories" binding:"required,min=1"`
 }
 
-// BatchCreateSupplyHistory 批量创建供应链历史记录
-func BatchCreateSupplyHistory(c *gin.Context) {
-	var req BatchCreateSupplyHistoryRequest
+// BatchCreateSupply_History 批量创建供应链历史记录
+func BatchCreateSupply_History(c *gin.Context) {
+	var req BatchCreateSupply_HistoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
@@ -1133,7 +1133,7 @@ func BatchCreateSupplyHistory(c *gin.Context) {
 
 	// 验证每条记录的数据长度和产品存在性
 	for _, history := range req.Histories {
-		if err := validateSupplyHistory(&history); err != nil {
+		if err := validateSupply_History(&history); err != nil {
 			c.JSON(http.StatusBadRequest, Response{
 				Code:    ErrorCode,
 				Message: "历史记录数据验证失败：" + err.Error(),
@@ -1143,7 +1143,7 @@ func BatchCreateSupplyHistory(c *gin.Context) {
 		}
 
 		// 检查产品是否存在
-		product, err := model.GetProductById(history.ProductId)
+		product, err := model.GetProductById(history.Product_Id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, Response{
 				Code:    ErrorCode,
@@ -1155,7 +1155,7 @@ func BatchCreateSupplyHistory(c *gin.Context) {
 		if product == nil {
 			c.JSON(http.StatusNotFound, Response{
 				Code:    ErrorCode,
-				Message: "产品 " + history.ProductId + " 不存在",
+				Message: "产品 " + history.Product_Id + " 不存在",
 				Data:    nil,
 			})
 			return

@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"log"
+	"main/internal/router"
+	"main/middleware"
 	"net/http"
 	"os"
 	"os/signal"
-	"supply_chain/middleware"
-	"supply_chain/router"
 	"syscall"
 	"time"
 
@@ -66,8 +66,8 @@ func main() {
 		// 公开的产品查询（使用可选认证，有token就获取用户信息，没有也可以）
 		public.GET("/products", middleware.AuthOptional(), router.GetAllProducts)
 		public.GET("/products/:product_id", middleware.AuthOptional(), router.GetProduct)
-		public.GET("/products/:product_id/history", middleware.AuthOptional(), router.GetSupplyHistoryByProduct)
-		public.GET("/supply-history", middleware.AuthOptional(), router.GetAllSupplyHistory)
+		public.GET("/products/:product_id/history", middleware.AuthOptional(), router.GetSupply_HistoryByProduct)
+		public.GET("/supply-history", middleware.AuthOptional(), router.GetAllSupply_History)
 	}
 
 	// 需要认证的 API
@@ -85,9 +85,9 @@ func main() {
 		auth.DELETE("/products/:product_id", router.DeleteProduct)
 
 		// 供应链历史管理（需要登录）
-		auth.POST("/supply-history", router.CreateSupplyHistory)
-		auth.POST("/supply-history/batch", router.BatchCreateSupplyHistory)
-		auth.DELETE("/supply-history", router.DeleteSupplyHistory)
+		auth.POST("/supply-history", router.CreateSupply_History)
+		auth.POST("/supply-history/batch", router.BatchCreateSupply_History)
+		auth.DELETE("/supply-history", router.DeleteSupply_History)
 	}
 
 	// 管理员 API（需要认证 + 管理员角色）
