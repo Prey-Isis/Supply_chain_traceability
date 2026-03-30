@@ -2,8 +2,8 @@ package router
 
 import (
 	"errors"
+	"main/internal/jwt"
 	"main/internal/model"
-	"main/jwt"
 	"net/http"
 	"strings"
 	"time"

@@ -71,7 +71,7 @@ func RefreshToken(tokenString string) (string, error) {
 	}
 
 	// 检查token是否即将过期（剩余时间小于1小时）
-	if time.Unix(claims.ExpiresAt, 0).Sub(time.Now()) < time.Hour {
+	if time.Until(time.Unix(claims.ExpiresAt, 0)) < time.Hour {
 		return GenerateToken(claims.Account, claims.Role)
 	}
 
