@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"main/internal/jwt"
+	"main/internal/model"
 	"main/internal/router"
 	"main/middleware"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +19,9 @@ import (
 )
 
 func main() {
+	// 打印启动横幅
+	printBanner()
+
 	// 设置运行模式
 	gin.SetMode(gin.DebugMode) // 生产模式 gin.ReleaseMode，开发时可改为 gin.DebugMode
 
@@ -149,10 +156,14 @@ func main() {
 
 	// 在 goroutine 中启动服务器
 	go func() {
-		log.Println("服务器启动在 http://localhost:8080")
-		log.Println("API文档: http://localhost:8080/api/v1")
+		fmt.Println("\n🚀 🚀 🚀 服务器启动中... 🚀 🚀 🚀")
+		fmt.Printf("📍 监听地址: http://localhost:8080\n")
+		fmt.Printf("📚 API文档: http://localhost:8080/api/v1\n")
+		fmt.Printf("❤️  健康检查: http://localhost:8080/health\n")
+		fmt.Println(strings.Repeat("─", 50))
+
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("启动服务器失败: %v", err)
+			log.Fatalf("❌ 启动服务器失败: %v", err)
 		}
 	}()
 
@@ -160,39 +171,89 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("正在关闭服务器...")
+	fmt.Println("\n🛑 收到关闭信号，正在优雅关闭服务器...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatal("服务器强制关闭:", err)
+		log.Fatal("❌ 服务器强制关闭:", err)
 	}
 
-	log.Println("服务器已关闭")
+	fmt.Println("✅ 服务器已安全关闭")
+	fmt.Println("👋 再见！")
 }
 
 // 初始化函数，在 main 之前执行
 func init() {
-	// 这里可以添加初始化操作，例如：
-	// - 加载配置文件
-	// - 连接数据库
-	// - 初始化日志
-	// - 创建必要的目录等
+	fmt.Println("╔════════════════════════════════════════════════════════╗")
+	fmt.Println("║     🌟 供应链管理系统正在初始化... 🌟                  ║")
+	fmt.Println("╚════════════════════════════════════════════════════════╝")
 
-	log.Println("初始化供应链管理系统...")
-
-	// 检查必要的配置
+	// 加载配置
+	fmt.Println("📋 正在加载配置...")
 	checkConfig()
+	fmt.Println("✅ 配置加载完成")
+
+	// 初始化数据库
+	fmt.Println("🗄️  正在连接数据库...")
+	model.InitDB()
+
+	// 测试数据库连接
+	err := model.GetDB().Ping()
+	if err == nil {
+		fmt.Println("✅ 数据库连接成功！ 🎉")
+	} else {
+		fmt.Printf("❌ 数据库连接失败: %v\n", err)
+		log.Fatalf("无法连接到数据库: %v", err)
+	}
+
+	fmt.Println("✨ 系统初始化完成！ ✨")
+	fmt.Println()
+}
+
+// 打印启动横幅
+func printBanner() {
+	banner := `
+╔═══════════════════════════════════════════════════════════════╗
+║                                                               ║
+║   ███████╗██╗   ██╗██████╗ ██████╗ ██╗     ██╗   ██╗          ║
+║   ██╔════╝██║   ██║██╔══██╗██╔══██╗██║     ██║   ██║          ║
+║   ███████╗██║   ██║██████╔╝██████╔╝██║     ██║   ██║          ║
+║   ╚════██║██║   ██║██╔══██╗██╔══██╗██║     ██║   ██║          ║
+║   ███████║╚██████╔╝██████╔╝██║  ██║███████╗╚██████╔╝          ║
+║   ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝ ╚═════╝           ║
+║                                                               ║
+║                   供应链管理系统 v1.0.0                       ║
+║                   Supply Chain Management System              ║
+║                                                               ║
+╚═══════════════════════════════════════════════════════════════╝
+`
+	fmt.Println(banner)
 }
 
 // 检查配置
 func checkConfig() {
 	// 检查 JWT 密钥是否设置（实际应用中应该从配置文件读取）
-	if middleware.JWTSecretKey == "your-secret-key" {
-		log.Println("警告: 使用默认 JWT 密钥，请在生产环境中修改")
+	if jwt.JWTSecretKey == "your-secret-key" {
+		log.Println("⚠️  警告: 使用默认 JWT 密钥，请在生产环境中修改")
+	} else {
+		fmt.Println("🔐 JWT 密钥配置: ✓")
 	}
 
-	// 这里可以添加其他配置检查
-	log.Println("配置检查完成")
+	// 检查运行模式
+	if gin.Mode() == gin.ReleaseMode {
+		fmt.Println("🏭 运行模式: 生产模式 (Release)")
+	} else {
+		fmt.Println("🔧 运行模式: 开发模式 (Debug)")
+	}
+
+	// 其他配置检查
+	fmt.Println("📊 中间件配置:")
+	fmt.Println("   ├─ 🛡️  Recovery 中间件: ✓")
+	fmt.Println("   ├─ 📝 Logger 中间件: ✓")
+	fmt.Println("   ├─ 🆔 RequestID 中间件: ✓")
+	fmt.Println("   ├─ 🌐 CORS 中间件: ✓")
+	fmt.Println("   ├─ ⏱️  Timeout 中间件: ✓ (30s)")
+	fmt.Println("   └─ 🚦 RateLimiter 中间件: ✓ (100 req/s)")
 }

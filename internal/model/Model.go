@@ -110,7 +110,7 @@ func CreateUser(user *User) error {
 		return errors.New("database connection not initialized")
 	}
 
-	query := "INSERT INTO user (user_name, account, password, role) VALUES (?, ?, ?, ?)"
+	query := "INSERT INTO user (username, account, password, role) VALUES (?, ?, ?, ?)"
 
 	_, err := db.Exec(query,
 		user.UserName,
@@ -133,7 +133,7 @@ func GetUserByAccount(account string) (*User, error) {
 	}
 
 	user := &User{}
-	query := "SELECT user_name, account, password, role, create_time, update_time FROM user WHERE account = ?"
+	query := "SELECT username, account, password, role, create_time, update_time FROM user WHERE account = ?"
 
 	err := db.QueryRow(query, account).Scan(
 		&user.UserName,
@@ -162,7 +162,7 @@ func GetUserByName(userName string) (*User, error) {
 	}
 
 	user := &User{}
-	query := "SELECT user_name, account, password, role, create_time, update_time FROM user WHERE user_name = ?"
+	query := "SELECT username, account, password, role, create_time, update_time FROM user WHERE username = ?"
 
 	err := db.QueryRow(query, userName).Scan(
 		&user.UserName,
@@ -190,7 +190,7 @@ func GetAllUsers() ([]User, error) {
 		return nil, errors.New("database connection not initialized")
 	}
 
-	query := "SELECT user_name, account, password, role, create_time, update_time FROM user ORDER BY create_time DESC"
+	query := "SELECT username, account, password, role, create_time, update_time FROM user ORDER BY create_time DESC"
 
 	rows, err := db.Query(query)
 	if err != nil {
@@ -228,7 +228,7 @@ func UpdateUser(user *User) error {
 		return errors.New("database connection not initialized")
 	}
 
-	query := "UPDATE user SET user_name = ?, password = ?, role = ? WHERE account = ?"
+	query := "UPDATE user SET username = ?, password = ?, role = ? WHERE account = ?"
 
 	result, err := db.Exec(query,
 		user.UserName,

@@ -2,8 +2,8 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"log"
+	"main/internal/jwt"
 	"main/internal/model"
 	"main/internal/router"
 	"net/http"
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt"
 )
 
 // 定义上下文中的键名常量
@@ -20,69 +19,6 @@ const (
 	ContextAccountKey = "account"
 	ContextRoleKey    = "role"
 )
-
-// 定义JWT常量
-const (
-	JWTSecretKey = "your-secret-key" // 实际使用时应该从配置文件中读取
-	TokenExpire  = 24 * time.Hour    // token过期时间
-)
-
-// CustomClaims 自定义JWT声明
-type CustomClaims struct {
-	Account string `json:"account"`
-	Role    string `json:"role"`
-	jwt.StandardClaims
-}
-
-// ==================== JWT相关函数 ====================
-
-// GenerateToken 生成JWT token
-func GenerateToken(account, role string) (string, error) {
-	claims := CustomClaims{
-		Account: account,
-		Role:    role,
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: time.Now().Add(TokenExpire).Unix(),
-			IssuedAt:  time.Now().Unix(),
-			Issuer:    "supply-chain-system",
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(JWTSecretKey))
-}
-
-// ParseToken 解析JWT token
-func ParseToken(tokenString string) (*CustomClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(JWTSecretKey), nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
-		return claims, nil
-	}
-
-	return nil, errors.New("invalid token")
-}
-
-// RefreshToken 刷新token
-func RefreshToken(tokenString string) (string, error) {
-	claims, err := ParseToken(tokenString)
-	if err != nil {
-		return "", err
-	}
-
-	// 检查token是否即将过期（剩余时间小于1小时）
-	if time.Until(time.Unix(claims.ExpiresAt, 0)) < time.Hour {
-		return GenerateToken(claims.Account, claims.Role)
-	}
-
-	return tokenString, nil
-}
 
 // ==================== 基础中间件 ====================
 
@@ -194,7 +130,7 @@ func AuthRequired() gin.HandlerFunc {
 		tokenString = strings.TrimSpace(tokenString)
 
 		// 解析token
-		claims, err := ParseToken(tokenString)
+		claims, err := jwt.ParseToken(tokenString)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, router.Response{
 				Code:    router.ErrorCode,
@@ -227,7 +163,7 @@ func AuthRequired() gin.HandlerFunc {
 		}
 
 		// 检查token是否需要刷新（即将过期）
-		newToken, err := RefreshToken(tokenString)
+		newToken, err := jwt.RefreshToken(tokenString)
 		if err == nil && newToken != tokenString {
 			// 如果token已刷新，在响应头中返回新token
 			c.Writer.Header().Set("X-New-Token", newToken)
@@ -254,7 +190,7 @@ func AuthOptional() gin.HandlerFunc {
 			tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 			tokenString = strings.TrimSpace(tokenString)
 
-			claims, err := ParseToken(tokenString)
+			claims, err := jwt.ParseToken(tokenString)
 			if err == nil {
 				user, err := model.GetUserByAccount(claims.Account)
 				if err == nil && user != nil {

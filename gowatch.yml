@@ -1,0 +1,17 @@
+# gowatch.yml
+build_pkg: "./cmd/api"
+# 关键：直接指定完整的输出路径和文件名
+output: "./tmp/api.exe"
+# 不要用 appname，或者留空
+appname: ""
+watch_paths:
+  - .
+build_log: "🔨 正在编译..."
+run_log: "🚀 服务已启动..."
+error_log: "❌ 编译失败..."
+watch_exts:
+  - .go
+excluded_paths:
+  - tmp
+  - vendor
+  - .git

@@ -387,7 +387,7 @@ func GetUser(c *gin.Context) {
 
 // GetUserByName 根据用户名获取用户（管理员功能）
 func GetUserByName(c *gin.Context) {
-	userName := strings.TrimSpace(c.Query("user_name"))
+	userName := strings.TrimSpace(c.Query("UserName"))
 	if userName == "" {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    ErrorCode,
