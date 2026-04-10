@@ -89,12 +89,10 @@ func main() {
 		auth.POST("/products", router.CreateProduct)
 		auth.PUT("/products/:product_id", router.UpdateProduct)
 		auth.PATCH("/products/:product_id/status", router.UpdateProductStatus)
-		auth.DELETE("/products/:product_id", router.DeleteProduct)
 
 		// 供应链历史管理（需要登录）
 		auth.POST("/supply-history", router.CreateSupply_History)
 		auth.POST("/supply-history/batch", router.BatchCreateSupply_History)
-		auth.DELETE("/supply-history", router.DeleteSupply_History)
 	}
 
 	// 管理员 API（需要认证 + 管理员角色）
@@ -109,6 +107,9 @@ func main() {
 		admin.GET("/users/:account", router.GetUser)
 		admin.PUT("/users/:account", router.UpdateUser)
 		admin.DELETE("/users/:account", router.DeleteUser)
+
+		// 产品管理（仅管理员）
+		auth.DELETE("/products/:product_id", router.DeleteProduct)
 	}
 
 	// 经理及以上权限 API（需要认证 + 经理或管理员角色）

@@ -387,30 +387,6 @@ func GetAllSupplyHistory() ([]Supply_History, error) {
 	return histories, nil
 }
 
-// DeleteSupplyHistory 删除指定的历史记录
-func DeleteSupplyHistory(productId string, createTime string) error {
-	if db == nil {
-		return errors.New("database connection not initialized")
-	}
-
-	query := "DELETE FROM supply_history WHERE product_id = ? AND create_time = ?"
-	result, err := db.Exec(query, productId, createTime)
-	if err != nil {
-		return fmt.Errorf("failed to delete supply history: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		return errors.New("supply history not found")
-	}
-
-	return nil
-}
-
 // ==================== Product 表操作 ====================
 
 // CreateProduct 创建产品（使用事务确保数据一致性，时间字段由数据库自动设置）

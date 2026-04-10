@@ -1078,45 +1078,9 @@ type DeleteSupply_HistoryRequest struct {
 	CreateTime string `json:"Create_Time" binding:"required"`
 }
 
-// DeleteSupply_History 删除指定的历史记录
-func DeleteSupply_History(c *gin.Context) {
-	var req DeleteSupply_HistoryRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    ErrorCode,
-			Message: "请求参数错误：" + err.Error(),
-			Data:    nil,
-		})
-		return
-	}
-
-	if err := model.DeleteSupplyHistory(req.Product_Id, req.CreateTime); err != nil {
-		if err.Error() == "supply history not found" {
-			c.JSON(http.StatusNotFound, Response{
-				Code:    ErrorCode,
-				Message: "供应链历史记录不存在",
-				Data:    nil,
-			})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    ErrorCode,
-			Message: "删除供应链历史记录失败：" + err.Error(),
-			Data:    nil,
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    SuccessCode,
-		Message: "供应链历史记录删除成功",
-		Data:    nil,
-	})
-}
-
 // BatchCreateSupply_HistoryRequest 批量创建供应链历史请求结构
 type BatchCreateSupply_HistoryRequest struct {
-	Histories []model.Supply_History `json:"histories" binding:"required,min=1"`
+	Histories []model.Supply_History `json:"Histories" binding:"required,min=1"`
 }
 
 // BatchCreateSupply_History 批量创建供应链历史记录
