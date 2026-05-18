@@ -40,7 +40,7 @@ export const productForm = reactive({
   Product_Id: '',
   Name: '',
   Current_Holder: '',
-  Status: '1'
+  Status: 'produced' // 从 '1' 改为 'produced'（已生产）
 })
 export const formLoading = ref(false)
 

@@ -551,6 +551,7 @@ func UpdateProduct(product *Product) error {
 		product.Status,
 		product.Product_Id,
 	)
+	fmt.Println(product)
 
 	if err != nil {
 		return fmt.Errorf("failed to update product: %w", err)

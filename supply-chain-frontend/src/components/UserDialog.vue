@@ -18,19 +18,24 @@
         />
         <el-input v-else :model-value="userForm.Account" disabled />
       </el-form-item>
+      
       <el-form-item label="用户名" required>
         <el-input v-model="userForm.UserName" placeholder="请输入用户名" maxlength="30" />
       </el-form-item>
-      <!-- 密码：仅新增时显示 -->
-      <el-form-item v-if="!editingUser" label="密码" required>
+      
+      <!-- 密码：新增和编辑都显示 -->
+      <el-form-item label="密码">
         <el-input
           v-model="userForm.PassWord"
           type="password"
-          placeholder="请输入密码"
+          :placeholder="editingUser ? '留空则不修改密码' : '请输入密码'"
           show-password
           maxlength="30"
         />
+        <!-- 编辑模式下提示用户密码可留空 -->
+        <span v-if="editingUser" class="form-tip">留空则不修改密码</span>
       </el-form-item>
+      
       <el-form-item label="角色" required>
         <el-select v-model="userForm.Role" placeholder="请选择角色" style="width: 100%">
           <el-option label="普通用户" value="user" />
@@ -39,6 +44,7 @@
         </el-select>
       </el-form-item>
     </el-form>
+    
     <template #footer>
       <el-button @click="showUserDialog = false">取消</el-button>
       <el-button type="primary" @click="handleSubmit" :loading="userFormLoading">
@@ -63,6 +69,8 @@ async function handleSubmit() {
     ElMessage.warning('请输入用户名')
     return
   }
+  
+  // 新增模式下的必填验证
   if (!editingUser.value) {
     if (!userForm.Account.trim()) {
       ElMessage.warning('请输入账号')
@@ -77,11 +85,18 @@ async function handleSubmit() {
   userFormLoading.value = true
   try {
     if (editingUser.value) {
-      // 编辑模式：更新用户
-      await updateUserAPI(editingUser.value.Account, {
+      // 编辑模式：构建更新数据
+      const updateData = {
         UserName: userForm.UserName,
         Role: userForm.Role
-      })
+      }
+      
+      // 如果填写了密码，则包含密码字段
+      if (userForm.PassWord.trim()) {
+        updateData.PassWord = userForm.PassWord.trim()
+      }
+      
+      await updateUserAPI(editingUser.value.Account, updateData)
       ElMessage.success('用户信息更新成功')
     } else {
       // 新增模式：创建用户
@@ -105,3 +120,12 @@ async function handleSubmit() {
   }
 }
 </script>
+
+<style scoped>
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+  display: inline-block;
+}
+</style>
