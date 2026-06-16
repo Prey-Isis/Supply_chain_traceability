@@ -9,7 +9,7 @@ COPY supply-chain-frontend/ ./
 RUN npm run build
 
 # 第二阶段：构建 Go 后端
-FROM golang:1.21-alpine AS backend
+FROM golang:1.26-alpine AS backend
 
 WORKDIR /app
 COPY go.mod go.sum ./
