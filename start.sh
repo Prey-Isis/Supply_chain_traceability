@@ -1,6 +1,11 @@
 #!/bin/sh
-# 后台启动 Go 应用
+set -e
+
+echo "Starting Go backend..."
 /app/supply_app &
 
-# 前台启动 Nginx（必须前台，否则容器会退出）
+echo "Waiting for Go backend to start..."
+sleep 3
+
+echo "Starting Nginx..."
 nginx -g "daemon off;"
