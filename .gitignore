@@ -1,0 +1,15 @@
+# 环境变量（含密码，绝对不能提交）
+.env
+
+# 编译输出
+tmp/
+*.exe
+*.test
+*.out
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/

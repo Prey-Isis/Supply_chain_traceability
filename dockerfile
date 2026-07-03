@@ -1,3 +1,8 @@
+# ============================================================
+# 供应链溯源系统 - Dockerfile
+# 多阶段构建：前端构建 → Go 后端构建 → Nginx + App 运行
+# ============================================================
+
 # 第一阶段：构建 Vue 前端
 FROM node:18-alpine AS frontend
 
@@ -21,6 +26,9 @@ FROM golang:1.26-alpine AS backend
 
 WORKDIR /app
 
+# 安装必要的构建工具
+RUN apk add --no-cache gcc musl-dev
+
 # 设置 Go 代理加速
 ENV GOPROXY=https://goproxy.cn,direct
 
@@ -31,18 +39,21 @@ RUN go mod download
 # 再复制源码
 COPY . .
 
-# 构建
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o supply_app .
+# 构建（注意入口在 cmd/api/ 目录）
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o supply_app ./cmd/api/
 
 # 第三阶段：最终运行镜像
 FROM nginx:alpine
 
-# 安装 curl（可选）
+# 安装必要工具（用于健康检查）
 RUN apk add --no-cache curl
 
 # 复制 Go 应用
 COPY --from=backend /app/supply_app /app/supply_app
 RUN chmod +x /app/supply_app
+
+# 复制配置文件 ⚠️ 之前漏掉了，导致启动失败！
+COPY --from=backend /app/config/config.yaml /app/config/config.yaml
 
 # 复制前端静态文件
 COPY --from=frontend /web/dist /usr/share/nginx/html
@@ -55,4 +66,8 @@ COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
 EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+    CMD curl -f http://localhost:80/ || exit 1
+
 CMD ["/start.sh"]

@@ -1,8 +1,46 @@
+# Git
 .git
+.gitattributes
 .gitignore
+.github
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Node
 node_modules
-dist
-*.log
-.DS_Store
+supply-chain-frontend/node_modules
+supply-chain-frontend/dist
+
+# Go
+tmp/
 *.exe
 *.test
+*.out
+vendor/
+
+# 文档
+README.md
+*.md
+vue.md
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 环境变量（.env 不提交但保留模板）
+.env
+
+# Docker
+docker-compose*.yml
+.dockerignore
+
+# 脚本
+scripts/
+gowatch.yml
+
+# 日志
+*.log
