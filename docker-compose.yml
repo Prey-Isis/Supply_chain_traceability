@@ -4,8 +4,6 @@
 # 本地开发：docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 # ============================================================
 
-version: '3.8'
-
 services:
   # MySQL 数据库
   mysql:
@@ -19,7 +17,8 @@ services:
       MYSQL_COLLATION: utf8mb4_unicode_ci
       TZ: Asia/Shanghai
     ports:
-      - "3306:3306"
+      # 仅本机访问 MySQL，不暴露到外网
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       # 首次启动时自动建表 + 导入种子数据
@@ -46,6 +45,7 @@ services:
     container_name: supply-chain-app
     restart: always
     ports:
+      # 绑定所有网络接口，允许外部 IP 访问
       - "${APP_PORT:-80}:80"
     environment:
       # 通过环境变量覆盖 config.yaml 中的数据库配置

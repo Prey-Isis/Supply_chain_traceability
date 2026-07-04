@@ -26,9 +26,6 @@ FROM golang:1.26-alpine AS backend
 
 WORKDIR /app
 
-# 安装必要的构建工具
-RUN apk add --no-cache gcc musl-dev
-
 # 设置 Go 代理加速
 ENV GOPROXY=https://goproxy.cn,direct
 
@@ -45,8 +42,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o supply_app ./cmd/api/
 # 第三阶段：最终运行镜像
 FROM nginx:alpine
 
-# 安装必要工具（用于健康检查）
-RUN apk add --no-cache curl
+# 安装必要工具（tini 管理进程、curl 健康检查）
+RUN apk add --no-cache curl tini
+
+# 设置工作目录（Go 程序从此加载 config/config.yaml）
+WORKDIR /app
 
 # 复制 Go 应用
 COPY --from=backend /app/supply_app /app/supply_app
@@ -70,4 +70,6 @@ EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
     CMD curl -f http://localhost:80/ || exit 1
 
+# tini 作为 init 进程，确保 SIGTERM 正确转发到子进程
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["/start.sh"]

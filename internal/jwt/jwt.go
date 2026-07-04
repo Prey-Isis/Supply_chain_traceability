@@ -2,7 +2,7 @@ package jwt
 
 import (
 	"errors"
-
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt"
@@ -17,9 +17,18 @@ const (
 
 // 定义JWT常量
 const (
-	JWTSecretKey = "your-secret-key" // 实际使用时应该从配置文件中读取
-	TokenExpire  = 24 * time.Hour    // token过期时间
+	TokenExpire = 24 * time.Hour // token过期时间
 )
+
+// JWTSecretKey 从环境变量读取，生产环境务必设置 JWT_SECRET
+var JWTSecretKey = getEnvOrDefault("JWT_SECRET", "your-secret-key")
+
+func getEnvOrDefault(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return defaultVal
+}
 
 // CustomClaims 自定义JWT声明
 type CustomClaims struct {

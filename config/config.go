@@ -4,6 +4,8 @@ package config
 import (
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -90,7 +92,7 @@ func InitConfig(configPath string) error {
 	return nil
 }
 
-// setDefaults 设置默认值
+// setDefaults 设置默认值（支持环境变量覆盖，用于 Docker 部署）
 func setDefaults(config *Config) {
 	// 服务器默认配置
 	if config.Server.Port == 0 {
@@ -110,6 +112,27 @@ func setDefaults(config *Config) {
 	if config.Database.Port == 0 {
 		config.Database.Port = 3306
 	}
+
+	// ===== 环境变量覆盖（Docker 部署时使用）=====
+	// 优先级：环境变量 > config.yaml > 默认值
+	if host := os.Getenv("DB_HOST"); host != "" {
+		config.Database.Host = host
+	}
+	if port := os.Getenv("DB_PORT"); port != "" {
+		if p, err := strconv.Atoi(port); err == nil {
+			config.Database.Port = p
+		}
+	}
+	if user := os.Getenv("DB_USER"); user != "" {
+		config.Database.Username = user
+	}
+	if password := os.Getenv("DB_PASSWORD"); password != "" {
+		config.Database.Password = password
+	}
+	if dbName := os.Getenv("DB_NAME"); dbName != "" {
+		config.Database.Database = dbName
+	}
+
 	// 数据库连接池默认值
 	if config.Database.MaxIdleConns == 0 {
 		config.Database.MaxIdleConns = 10

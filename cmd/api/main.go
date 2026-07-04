@@ -22,8 +22,12 @@ func main() {
 	// 打印启动横幅
 	printBanner()
 
-	// 设置运行模式
-	gin.SetMode(gin.DebugMode) // 生产模式 gin.ReleaseMode，开发时可改为 gin.DebugMode
+	// 设置运行模式（优先从环境变量 GIN_MODE 读取）
+	if mode := os.Getenv("GIN_MODE"); mode == "release" {
+		gin.SetMode(gin.ReleaseMode)
+	} else {
+		gin.SetMode(gin.DebugMode)
+	}
 
 	// 创建 Gin 引擎
 	r := gin.New()
