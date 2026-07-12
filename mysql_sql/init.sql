@@ -52,4 +52,9 @@ CREATE TABLE `supply_history`  (
   CONSTRAINT `product_id` FOREIGN KEY (`product_id`) REFERENCES `product` (`product_id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE = InnoDB AUTO_INCREMENT = 14 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = Dynamic;
 
+-- ==================== 种子数据 ====================
+-- 管理员测试账号: 11111111 / 123456
+INSERT INTO `user` (`username`, `account`, `password`, `role`) VALUES
+('11111111', '11111111', '123456', 'admin');
+
 SET FOREIGN_KEY_CHECKS = 1;
