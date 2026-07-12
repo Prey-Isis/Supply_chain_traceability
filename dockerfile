@@ -4,7 +4,7 @@
 # ============================================================
 
 # 第一阶段：构建 Vue 前端
-FROM node:18-alpine AS frontend
+FROM node:22-alpine AS frontend
 
 WORKDIR /web
 
