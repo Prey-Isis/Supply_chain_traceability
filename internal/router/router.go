@@ -740,7 +740,54 @@ func GetProduct(c *gin.Context) {
 	})
 }
 
-// GetAllProducts 获取所有产品
+// GetProductConcurrent 根据ID获取产品（并发版：同时查询产品信息 + 供应链历史）
+func GetProductConcurrent(c *gin.Context) {
+	Product_Id := strings.TrimSpace(c.Param("product_id"))
+	if Product_Id == "" {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    ErrorCode,
+			Message: "产品ID不能为空",
+			Data:    nil,
+		})
+		return
+	}
+
+	if len(Product_Id) > MaxFieldLength {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    ErrorCode,
+			Message: "产品ID长度不能超过25个字符",
+			Data:    nil,
+		})
+		return
+	}
+
+	product, err := model.GetProductByIdConcurrent(Product_Id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    ErrorCode,
+			Message: "获取产品失败：" + err.Error(),
+			Data:    nil,
+		})
+		return
+	}
+
+	if product == nil {
+		c.JSON(http.StatusNotFound, Response{
+			Code:    ErrorCode,
+			Message: "产品不存在",
+			Data:    nil,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    SuccessCode,
+		Message: "获取产品成功（并发查询）",
+		Data:    product,
+	})
+}
+
+// GetAllProducts 获取所有产品（原版：串行查询历史）
 func GetAllProducts(c *gin.Context) {
 	products, err := model.GetAllProducts()
 	if err != nil {
@@ -755,6 +802,25 @@ func GetAllProducts(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{
 		Code:    SuccessCode,
 		Message: "获取产品列表成功",
+		Data:    products,
+	})
+}
+
+// GetAllProductsConcurrent 获取所有产品（并发版：Goroutine + Channel 并发查询历史）
+func GetAllProductsConcurrent(c *gin.Context) {
+	products, err := model.GetAllProductsConcurrent()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    ErrorCode,
+			Message: "获取产品列表失败：" + err.Error(),
+			Data:    products, // ★ 即使有部分错误，也把已成功的数据返回给前端
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    SuccessCode,
+		Message: "获取产品列表成功（并发查询）",
 		Data:    products,
 	})
 }

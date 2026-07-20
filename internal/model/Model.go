@@ -7,6 +7,7 @@ import (
 	"main/config"
 	"main/pkg/utils"
 	"strings"
+	"sync"  // ★ Goroutine 同步原语：WaitGroup 用于等待一组 goroutine 全部完成
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -535,6 +536,282 @@ func GetAllProducts() ([]Product, error) {
 	}
 
 	return products, nil
+}
+
+// ============================================================
+// ★ 并发优化版：GetAllProductsConcurrent
+// ============================================================
+// 【为什么需要这个版本？】
+// 原版 GetAllProducts 是串行的 N+1 模式：
+//   查询所有产品（1次SQL）→ 遍历每个产品，逐个查历史（N次SQL）
+//   总耗时 = 1次查询耗时 + N×每次查询耗时
+//   假如有 50 个产品，每个历史查询 30ms，总耗时 = 50×30 = 1500ms
+//
+// 【Goroutine + Channel 方案怎么解决？】
+// 核心思路：把 N 次查历史的操作"并发"做，而不是"一个接一个"做
+//   总耗时 ≈ 1次查询耗时 + 30ms（所有历史查询同时发起，只等最慢的那个）
+//   100个产品也能在大约 50ms 内完成，而不是 3000ms！
+//
+// 【涉及的核心概念】
+//   1. goroutine  — go 关键字开一个"轻量级线程"，语法: go 函数名()
+//   2. Channel    — goroutine 之间传递数据的"管道"，语法: make(chan 类型, 缓冲区大小)
+//   3. WaitGroup  — 计数器，用来"等所有 goroutine 跑完"，wg.Add/Wg.Done/wg.Wait
+//   4. 闭包变量陷阱 — 循环里启动 goroutine 时，要"捕获"当前循环变量的值，否则出错
+// ============================================================
+
+// productResult 每个 goroutine 的返回值"包裹"结构体
+// 为什么要定义这个？因为 Channel 只能传一种类型，我们需要同时传回 product_id、历史数据和错误
+type productResult struct {
+	ProductID string            // 产品ID，用来把结果"贴回"对应的产品上
+	Histories []Supply_History  // 该产品的供应链历史记录
+	Err       error             // 如果查询出错，把错误放这里（不中断其他 goroutine）
+}
+
+func GetAllProductsConcurrent() ([]Product, error) {
+	// ===== 第1步：查询所有产品（这一步没法并发，必须等结果）=====
+	if db == nil {
+		return nil, errors.New("database connection not initialized")
+	}
+
+	query := "SELECT product_id, name, current_holder, status, create_time, update_time FROM product ORDER BY create_time DESC"
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all products: %w", err)
+	}
+	defer rows.Close()
+
+	// 先扫出所有产品，暂不查历史
+	var products []Product
+	for rows.Next() {
+		var p Product
+		if err := rows.Scan(&p.Product_Id, &p.Name, &p.Current_Holder, &p.Status, &p.Create_Time, &p.Update_Time); err != nil {
+			return nil, fmt.Errorf("failed to scan product row: %w", err)
+		}
+		products = append(products, p)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating product rows: %w", err)
+	}
+
+	// 没有产品直接返回
+	if len(products) == 0 {
+		return products, nil
+	}
+
+	// ===== 第2步：创建 Channel 和 WaitGroup =====
+
+	// Channel：goroutine 之间的"快递管道"
+	//   make(chan productResult, len(products))
+	//   缓冲大小 = 产品数量，这样即使主 goroutine 还没"收货"，子 goroutine 也能把结果丢进去而不阻塞
+	resultChan := make(chan productResult, len(products))
+
+	// WaitGroup：一个"计数器"，用来等所有 goroutine 跑完
+	//   想象成：你派了 N 个工人去干活，每个工人出发前在计数器上 +1（Add），
+	//   干完活后 -1（Done），你只需要 Wait() 等到计数器归零就行
+	var wg sync.WaitGroup
+
+	// ===== 第3步：为每个产品启动一个 goroutine，并发查询历史 =====
+	for i := range products {
+		wg.Add(1) // 计数器 +1："我派了一个工人出去"
+
+		// ★★★ 重要：闭包变量捕获 ★★★
+		//   不能直接写 `go func() { ... products[i].Product_Id ... }()`
+		//   因为 goroutine 启动有延迟，等它真正执行时，for 循环可能已经跑完了，
+		//   此时 i 的值已经变成了最后一个索引，所有 goroutine 读到的都是同一个产品！
+		//
+		//   解决方法：把循环变量"复制一份"传给 goroutine
+		//   方法1（推荐）：for 循环里用 `i := i` 或 `productID := products[i].Product_Id`
+		//   方法2：go func(pid string) { ... }(products[i].Product_Id) 作为参数传入
+		productID := products[i].Product_Id // ★ 关键：把值"捕获"到局部变量，切断和循环变量的联系
+
+		go func(pid string) {
+			// defer wg.Done() 相当于"不管函数正常结束还是 panic，最后一定执行 Done()"
+			// 这保证了计数器一定会 -1，不会让 Wait() 永远等下去
+			defer wg.Done()
+
+			// 并发执行：调用已有的历史查询函数（它内部是独立的 DB 连接操作，线程安全）
+			histories, queryErr := GetSupplyHistoryByProductId(pid)
+
+			// 把结果（成功或失败）塞进 Channel
+			// 注意：这里不发 panic，而是把 error 作为结果字段传回去
+			//       这样一个产品的历史查失败了，不影响其他产品
+			resultChan <- productResult{
+				ProductID: pid,
+				Histories: histories,
+				Err:       queryErr,
+			}
+		}(productID) // ★ 把捕获好的值当作参数传进去
+	}
+
+	// ===== 第4步：等所有 goroutine 跑完，然后关闭 Channel =====
+	// 为什么要再开一个 goroutine 来关 Channel？
+	//   如果直接在主线等 wg.Wait() 再 close(resultChan)，那主线就卡住了，
+	//   下面的 for range resultChan 就永远执行不到（死锁）。
+	//   所以把"等 + 关"放到一个独立的 goroutine 里去：
+	go func() {
+		wg.Wait()         // 阻塞，直到计数器归零（所有子 goroutine 都 Done了）
+		close(resultChan) // 关闭 Channel，通知 for range 循环"没有更多数据了，可以退出了"
+	}()
+
+	// ===== 第5步：从 Channel 收取结果，组装到 products 里 =====
+	//   用 map 建立 product_id → 在 products 切片中的索引 的映射
+	//   这样才能把异步返回的历史记录"贴回"对应的产品上
+	indexMap := make(map[string]int, len(products))
+	for idx, p := range products {
+		indexMap[p.Product_Id] = idx
+	}
+
+	// for range 一个 Channel：每来一个结果就处理一个，Channel 关闭后自动退出循环
+	var firstErr error // 记录第一个遇到的错误（只记录，不中断流程，尽量多返回数据）
+	for result := range resultChan {
+		if result.Err != nil {
+			// 不要中断！记录错误但继续处理其他结果
+			// 这样即使某个产品的历史查失败了，其他产品仍然正常返回
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to get history for product %s: %w", result.ProductID, result.Err)
+			}
+			continue
+		}
+
+		// 把历史记录贴到对应产品上
+		if idx, ok := indexMap[result.ProductID]; ok {
+			products[idx].Supply_History = result.Histories
+		}
+	}
+
+	// 如果有错误，返回第一个错误（但仍然返回已成功的产品数据）
+	if firstErr != nil {
+		return products, firstErr
+	}
+
+	return products, nil
+}
+
+// ============================================================
+// ★ 并发优化版：GetProductByIdConcurrent
+// ============================================================
+// 【原版 GetProductById 的问题】
+//   第1步：查产品基本信息（1次 DB 查询）
+//   第2步：等第1步完成 → 查供应链历史（1次 DB 查询）
+//   总耗时 = 产品查询耗时 + 历史查询耗时（串行累加）
+//
+// 【并发版的优化】
+//   第1步：同时发起产品查询和时间查询（不互相等待）
+//   第2步：两个结果都回来 → 组装返回
+//   总耗时 = max(产品查询耗时, 历史查询耗时)（只等最慢的那个）
+//
+// 【和前一个例子（GetAllProductsConcurrent）的区别】
+//   GetAllProducts 是"动态数量"的 goroutine（产品有几个就开几个）
+//   这个是"固定数量"的 goroutine（永远只开 2 个）
+//   两种模式都很常用，覆盖了大部分并发场景
+//
+// 【这个例子额外演示的概念】
+//   - 如何用 2 个 goroutine 并发执行两类完全不同的查询
+//   - 如何处理"一条查询返回了空结果"的情况（产品不存在时，丢弃历史查询结果）
+// ============================================================
+
+func GetProductByIdConcurrent(productId string) (*Product, error) {
+	if db == nil {
+		return nil, errors.New("database connection not initialized")
+	}
+
+	// ===== 定义两个 goroutine 返回的结果结构体 =====
+	// 和 GetAllProductsConcurrent 不同，这里只有 2 种结果：
+	//   1. 产品信息（可能为 nil，表示产品不存在）
+	//   2. 供应链历史（可能为空切片）
+	// 所以不需要通用的 productResult，直接用两个独立的结果变量 + Channel 区分即可
+
+	// Channel 传通用的结果：用同一个结构体，靠 type 字段区分是哪种结果
+	type queryResult struct {
+		kind     string            // "product" 还是 "history"
+		product  *Product          // 产品数据（只有 kind=="product" 时有值）
+		histories []Supply_History // 历史数据（只有 kind=="history" 时有值）
+		err      error
+	}
+
+	resultChan := make(chan queryResult, 2) // 缓冲=2，刚好容下两个 goroutine 的结果
+	var wg sync.WaitGroup
+
+	// ===== goroutine 1：查产品基本信息 =====
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		query := "SELECT name, current_holder, status, create_time, update_time FROM product WHERE product_id = ?"
+
+		var p Product
+		p.Product_Id = productId
+
+		err := db.QueryRow(query, productId).Scan(
+			&p.Name, &p.Current_Holder, &p.Status,
+			&p.Create_Time, &p.Update_Time,
+		)
+
+		// ErrNoRows 不是"错误"，只是"查不到"，需要特殊处理
+		if err == sql.ErrNoRows {
+			// 产品不存在 → 传 nil 表示空，err 传 nil 表示"查询本身没出错"
+			resultChan <- queryResult{kind: "product", product: nil, err: nil}
+			return
+		}
+
+		if err != nil {
+			resultChan <- queryResult{kind: "product", err: err}
+			return
+		}
+
+		resultChan <- queryResult{kind: "product", product: &p, err: nil}
+	}()
+
+	// ===== goroutine 2：查供应链历史 =====
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// 复用已有的查询函数（线程安全，内部各自使用独立的 DB 连接）
+		histories, err := GetSupplyHistoryByProductId(productId)
+		resultChan <- queryResult{kind: "history", histories: histories, err: err}
+	}()
+
+	// ===== 关闭 Channel 的 goroutine =====
+	// 和 GetAllProductsConcurrent 一样的模式：等两个 goroutine 都 Done() 了再 close
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// ===== 从 Channel 收集结果 =====
+	var productResult *Product // 产品查询结果（nil = 不存在）
+	var allHistories []Supply_History
+	var firstErr error
+
+	for result := range resultChan {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
+		}
+
+		switch result.kind {
+		case "product":
+			productResult = result.product
+		case "history":
+			allHistories = result.histories
+		}
+	}
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	// 产品不存在
+	if productResult == nil {
+		return nil, nil
+	}
+
+	// 组装最终结果：把历史记录贴到产品上
+	productResult.Supply_History = allHistories
+	return productResult, nil
 }
 
 // UpdateProduct 更新产品信息（update_time由数据库自动更新）

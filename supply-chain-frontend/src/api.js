@@ -68,12 +68,12 @@ export function getCurrentUserAPI() {
 // ==================== 产品管理 API（公开） ====================
 /** 获取产品列表 */
 export function getProductsAPI() {
-  return api.get('/products')
+  return api.get('/products/concurrent')
 }
 
 /** 获取单个产品详情 */
 export function getProductDetailAPI(productId) {
-  return api.get(`/products/${productId}`)
+  return api.get(`/products/concurrent/${productId}`)
 }
 
 /** 获取产品供应链历史 */

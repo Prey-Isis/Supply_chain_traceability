@@ -76,6 +76,8 @@ func main() {
 
 		// 公开的产品查询（使用可选认证，有token就获取用户信息，没有也可以）
 		public.GET("/products", middleware.AuthOptional(), router.GetAllProducts)
+		public.GET("/products/concurrent", middleware.AuthOptional(), router.GetAllProductsConcurrent) // ★ 并发版产品列表
+		public.GET("/products/concurrent/:product_id", middleware.AuthOptional(), router.GetProductConcurrent) // ★ 并发版单个产品
 		public.GET("/products/:product_id", middleware.AuthOptional(), router.GetProduct)
 		public.GET("/products/:product_id/history", middleware.AuthOptional(), router.GetSupply_HistoryByProduct)
 		public.GET("/supply-history", middleware.AuthOptional(), router.GetAllSupply_History)
