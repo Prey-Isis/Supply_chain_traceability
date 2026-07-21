@@ -8,6 +8,7 @@ import (
 	"main/internal/model"
 	"main/internal/router"
 	"main/middleware"
+	"main/pkg/worker"
 	"net/http"
 	"os"
 	"os/signal"
@@ -60,6 +61,7 @@ func main() {
 				"time":    time.Now().Format("2006-01-02 15:04:05"),
 				"status":  "ok",
 				"version": "1.0.0",
+				"worker":  TaskWorker.Stats(), // ★ 健康检查里带上 Worker 统计
 			},
 		})
 	})
@@ -152,6 +154,20 @@ func main() {
 		})
 	})
 
+	// ==================== Worker Pool 统计接口 ====================
+	r.GET("/worker/stats", func(c *gin.Context) {
+		c.JSON(http.StatusOK, router.Response{
+			Code:    router.SuccessCode,
+			Message: "Worker Pool 统计",
+			Data:    TaskWorker.Stats(),
+		})
+	})
+
+	// ==================== ★ 启动 Task Worker Pool ====================
+	// 必须在路由注册之后、HTTP 服务启动之前启动 Worker
+	// 因为 Worker 的 Handler 里可能用到路由相关的初始化
+	TaskWorker.Start()
+
 	// ==================== 启动服务器 ====================
 	server := &http.Server{
 		Addr:         ":8080",
@@ -180,12 +196,16 @@ func main() {
 	<-quit
 	fmt.Println("\n🛑 收到关闭信号，正在优雅关闭服务器...")
 
+	// 1. 先关 HTTP 服务（不再接受新请求）
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatal("❌ 服务器强制关闭:", err)
 	}
+
+	// 2. 再关 Worker Pool（等队列清空）
+	TaskWorker.Shutdown()
 
 	fmt.Println("✅ 服务器已安全关闭")
 	fmt.Println("👋 再见！")
@@ -217,6 +237,45 @@ func init() {
 
 	fmt.Println("✨ 系统初始化完成！ ✨")
 	fmt.Println()
+
+	// ==================== 启动 Task Worker Pool ====================
+	// 在 init() 阶段只初始化，在 main() 里 Start() 才能优雅关闭
+	// 这里调用 initTaskWorker() 创建 Pool 并注册 Handler
+	initTaskWorker()
+}
+
+// ============================================================
+// ★ Task Worker Pool 初始化
+// ============================================================
+// 【为什么在这里初始化？】
+//   init() 阶段 DB 已经连上，Worker 需要的依赖就绪。
+//   这里创建 Pool、注册 Handler，但 Worker 在下面 Start() 才真正开工。
+//
+// 【Worker 数量怎么定？】
+//   3 个就够了 —— 审计日志/状态同步都是轻量 DB 操作，
+//   阿里云最小配置（1核1G）跑 3 个 Worker 绰绰有余。
+//   调大要谨慎：Worker 多了 = DB 连接池压力大。
+//
+// 【队列容量怎么定？】
+//   1000 缓冲够容纳突发流量。正常情况队列里几乎没积压，
+//   只有大批量导入时（BatchCreateSupply_History）才会稍微排队。
+// ============================================================
+var TaskWorker *worker.WorkerPool // 全局单例，供 router.go 的 Handler 调用
+
+func initTaskWorker() {
+	// 创建 Worker Pool: 3 个工人, 1000 容量的任务队列
+	pool := worker.New(3, 1000)
+
+	// 注册三种任务类型的处理函数
+	pool.RegisterHandler(worker.TaskAuditLog, worker.HandleAuditLog)
+	pool.RegisterHandler(worker.TaskStatusSync, worker.HandleStatusSync)
+	pool.RegisterHandler(worker.TaskStatsRefresh, worker.HandleStatsRefresh)
+
+	// ★ 设置为全局单例，供外部包通过 worker.SubmitTask() 调用
+	worker.DefaultPool = pool
+	TaskWorker = pool // 保持兼容 main 包内部的引用
+
+	fmt.Println("👷 Worker Pool 已就绪: 3 workers, 1000 queue capacity")
 }
 
 // 打印启动横幅

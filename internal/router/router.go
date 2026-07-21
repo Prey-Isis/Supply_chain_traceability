@@ -2,8 +2,11 @@ package router
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"main/internal/jwt"
 	"main/internal/model"
+	"main/pkg/worker"
 	"net/http"
 	"strings"
 	"time"
@@ -1072,6 +1075,54 @@ func CreateSupply_History(c *gin.Context) {
 			Data:    nil,
 		})
 		return
+	}
+
+	// ===== ★ 异步任务投递：不阻塞 HTTP 响应 =====
+	// 供应链历史创建成功 → 触发三个后台任务：
+	//   1. 写审计日志（谁操作的、操作了什么）
+	//   2. 同步产品状态（根据最新操作自动流转状态）
+	//   3. 刷新统计数据（更新产品历史记录计数）
+	//
+	// 【关键设计：非阻塞投递】
+	//   worker.SubmitTask() 内部用 select + default，
+	//   如果队列满了 → 直接返回 ErrQueueFull，不卡 HTTP。
+	//   这里选择只打日志不报错：用户不关心后台任务是否入队，只关心历史记录是否创建成功。
+
+	// 从 JWT 中提取操作人（如果有的话）
+	operator := "unknown"
+	if userInfo, exists := c.Get(jwt.ContextAccountKey); exists {
+		if account, ok := userInfo.(string); ok {
+			operator = account
+		}
+	}
+
+	// 任务1：审计日志
+	auditTask := worker.NewTask(worker.TaskAuditLog, worker.AuditLogPayload{
+		ProductID:   req.Product_Id,
+		ProductName: req.Product_Name,
+		Action:      "supply_history_created",
+		Operator:    operator,
+		Detail:      fmt.Sprintf("节点=%s, 位置=%s, 操作=%s", req.Node_Name, req.Location, req.Action),
+	})
+	if err := worker.SubmitTask(auditTask); err != nil {
+		log.Printf("⚠️  审计日志任务投递失败: %v", err)
+	}
+
+	// 任务2：状态同步
+	statusTask := worker.NewTask(worker.TaskStatusSync, worker.StatusSyncPayload{
+		ProductID: req.Product_Id,
+		NewStatus: "", // 空表示让 Worker 自动判断
+	})
+	if err := worker.SubmitTask(statusTask); err != nil {
+		log.Printf("⚠️  状态同步任务投递失败: %v", err)
+	}
+
+	// 任务3：统计刷新
+	statsTask := worker.NewTask(worker.TaskStatsRefresh, worker.StatsRefreshPayload{
+		ProductID: req.Product_Id,
+	})
+	if err := worker.SubmitTask(statsTask); err != nil {
+		log.Printf("⚠️  统计刷新任务投递失败: %v", err)
 	}
 
 	c.JSON(http.StatusOK, Response{
