@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"main/config"
 	"main/internal/jwt"
 	"main/internal/model"
 	"main/internal/router"
 	"main/middleware"
+	"main/pkg/mq"
 	"main/pkg/worker"
 	"net/http"
 	"os"
@@ -22,6 +24,10 @@ import (
 func main() {
 	// 打印启动横幅
 	printBanner()
+
+	// ★ 初始化 Task Worker Pool（连 MQ + 注册 Handler）
+	// 放在这里而不是 init()，因为 init() 里 DB 连接可能还没建立
+	initTaskWorker()
 
 	// 设置运行模式（优先从环境变量 GIN_MODE 读取）
 	if mode := os.Getenv("GIN_MODE"); mode == "release" {
@@ -237,45 +243,54 @@ func init() {
 
 	fmt.Println("✨ 系统初始化完成！ ✨")
 	fmt.Println()
-
-	// ==================== 启动 Task Worker Pool ====================
-	// 在 init() 阶段只初始化，在 main() 里 Start() 才能优雅关闭
-	// 这里调用 initTaskWorker() 创建 Pool 并注册 Handler
-	initTaskWorker()
 }
 
 // ============================================================
-// ★ Task Worker Pool 初始化
+// ★ Task Worker Pool 初始化（RabbitMQ 版）
 // ============================================================
-// 【为什么在这里初始化？】
-//   init() 阶段 DB 已经连上，Worker 需要的依赖就绪。
-//   这里创建 Pool、注册 Handler，但 Worker 在下面 Start() 才真正开工。
+// 【启动顺序】
+//   1. 连接 RabbitMQ（config 里的 rabbitmq 配置）
+//   2. 创建 Worker Pool（传入 MQ 客户端）
+//   3. 注册 Handler（每种任务类型对应一个处理函数）
+//   4. 设置为全局单例（router 通过 worker.SubmitTask 调用）
+//
+// 【MQ 连接失败怎么办？】
+//   MQ 连不上不阻止服务启动 —— 审计/统计任务非关键，
+//   服务可以用"降级模式"运行（任务投递失败只记日志）。
+//   MQ 恢复后自动重连，不需要重启服务。
 //
 // 【Worker 数量怎么定？】
-//   3 个就够了 —— 审计日志/状态同步都是轻量 DB 操作，
-//   阿里云最小配置（1核1G）跑 3 个 Worker 绰绰有余。
-//   调大要谨慎：Worker 多了 = DB 连接池压力大。
-//
-// 【队列容量怎么定？】
-//   1000 缓冲够容纳突发流量。正常情况队列里几乎没积压，
-//   只有大批量导入时（BatchCreateSupply_History）才会稍微排队。
+//   3 个就够了 —— 审计日志/状态同步都是轻量操作。
+//   每个 Worker 是独立 goroutine，从 RabbitMQ 队列抢任务。
+//   RabbitMQ 的 QoS(prefetch=1) 自动做负载均衡。
 // ============================================================
 var TaskWorker *worker.WorkerPool // 全局单例，供 router.go 的 Handler 调用
 
 func initTaskWorker() {
-	// 创建 Worker Pool: 3 个工人, 1000 容量的任务队列
-	pool := worker.New(3, 1000)
+	// ----- 第 1 步：连接 RabbitMQ -----
+	mqURL := config.GetConfig().RabbitMQ.GetMQURL()
+	mqClient := mq.NewClient(mqURL)
 
-	// 注册三种任务类型的处理函数
+	if err := mqClient.Connect(); err != nil {
+		// MQ 连不上不 panic，降级模式运行（任务投递会失败，只记日志）
+		// MQ 恢复后 watchConnection 会自动重连
+		log.Printf("⚠️  RabbitMQ 连接失败（降级模式运行，任务投递将被跳过）: %v\n", err)
+		// 注意：不 return，继续创建 Pool，MQ 恢复后自动可用
+	}
+
+	// ----- 第 2 步：创建 Worker Pool -----
+	pool := worker.New(3, mqClient)
+
+	// ----- 第 3 步：注册三种任务类型的处理函数 -----
 	pool.RegisterHandler(worker.TaskAuditLog, worker.HandleAuditLog)
 	pool.RegisterHandler(worker.TaskStatusSync, worker.HandleStatusSync)
 	pool.RegisterHandler(worker.TaskStatsRefresh, worker.HandleStatsRefresh)
 
-	// ★ 设置为全局单例，供外部包通过 worker.SubmitTask() 调用
+	// ----- 第 4 步：设置为全局单例 -----
 	worker.DefaultPool = pool
-	TaskWorker = pool // 保持兼容 main 包内部的引用
+	TaskWorker = pool
 
-	fmt.Println("👷 Worker Pool 已就绪: 3 workers, 1000 queue capacity")
+	fmt.Println("👷 Worker Pool 已就绪: 3 workers (RabbitMQ 模式)")
 }
 
 // 打印启动横幅

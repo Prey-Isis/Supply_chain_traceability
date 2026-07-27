@@ -37,6 +37,35 @@ services:
     networks:
       - supply-chain-net
 
+  # RabbitMQ 消息队列
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: supply-chain-rabbitmq
+    restart: always
+    environment:
+      # 默认账号密码（生产环境通过 .env 覆盖）
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-supply_mq}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-SupplyMQ@2024}
+      TZ: Asia/Shanghai
+    ports:
+      # AMQP 协议端口：Go 服务连接用
+      # 宿主机映射方便本地调试（go run 直连 MQ）
+      # ⚠️ 阿里云安全组不要放行 5672 公网访问！容器间走内部网络即可
+      - "127.0.0.1:5672:5672"
+      # 管理界面：http://localhost:15672（只绑定本机回环，安全）
+      # SSH 隧道访问：ssh -L 15672:localhost:15672 root@服务器IP
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - supply-chain-net
+
   # 应用服务（Go 后端 + Nginx 前端）
   app:
     build:
@@ -54,17 +83,26 @@ services:
       - DB_USER=root
       - DB_PASSWORD=${MYSQL_ROOT_PASSWORD:-SupplyChain@2024}
       - DB_NAME=supply_chain
+      # RabbitMQ 连接配置（容器网络内用服务名 rabbitmq）
+      - MQ_HOST=rabbitmq
+      - MQ_PORT=5672
+      - MQ_USER=${RABBITMQ_USER:-supply_mq}
+      - MQ_PASSWORD=${RABBITMQ_PASSWORD:-SupplyMQ@2024}
       - GIN_MODE=${GIN_MODE:-release}
       - JWT_SECRET=${JWT_SECRET:-your-production-secret-key}
       - TZ=Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - supply-chain-net
 
 volumes:
   mysql_data:
+    driver: local
+  rabbitmq_data:
     driver: local
 
 networks:

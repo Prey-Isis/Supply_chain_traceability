@@ -33,10 +33,20 @@ type DatabaseConfig struct {
 	MaxLifetime  time.Duration `mapstructure:"max_lifetime"`
 }
 
+// RabbitMQConfig 消息队列配置
+type RabbitMQConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+	VHost    string `mapstructure:"vhost"`
+}
+
 // Config 总配置结构
 type Config struct {
 	Server   ServerConfig   `mapstructure:"server"`
 	Database DatabaseConfig `mapstructure:"database"`
+	RabbitMQ RabbitMQConfig `mapstructure:"rabbitmq"`
 }
 
 // 全局配置实例
@@ -133,6 +143,33 @@ func setDefaults(config *Config) {
 		config.Database.Database = dbName
 	}
 
+	// ===== RabbitMQ 环境变量覆盖（Docker 部署时使用）=====
+	if host := os.Getenv("MQ_HOST"); host != "" {
+		config.RabbitMQ.Host = host
+	}
+	if port := os.Getenv("MQ_PORT"); port != "" {
+		if p, err := strconv.Atoi(port); err == nil {
+			config.RabbitMQ.Port = p
+		}
+	}
+	if user := os.Getenv("MQ_USER"); user != "" {
+		config.RabbitMQ.Username = user
+	}
+	if password := os.Getenv("MQ_PASSWORD"); password != "" {
+		config.RabbitMQ.Password = password
+	}
+
+	// RabbitMQ 默认值
+	if config.RabbitMQ.Host == "" {
+		config.RabbitMQ.Host = "localhost"
+	}
+	if config.RabbitMQ.Port == 0 {
+		config.RabbitMQ.Port = 5672
+	}
+	if config.RabbitMQ.VHost == "" {
+		config.RabbitMQ.VHost = "/"
+	}
+
 	// 数据库连接池默认值
 	if config.Database.MaxIdleConns == 0 {
 		config.Database.MaxIdleConns = 10
@@ -171,4 +208,11 @@ func (c *Config) String() string {
 	return fmt.Sprintf("Server: %+v, Database: {Driver:%s Host:%s Port:%d Username:%s Password:****** Database:%s}",
 		c.Server, c.Database.Driver, c.Database.Host, c.Database.Port,
 		c.Database.Username, c.Database.Database)
+}
+
+// GetMQURL 获取 RabbitMQ 连接字符串（AMQP 协议格式）
+// 格式: amqp://用户名:密码@主机:端口/虚拟主机
+func (mq *RabbitMQConfig) GetMQURL() string {
+	return fmt.Sprintf("amqp://%s:%s@%s:%d%s",
+		mq.Username, mq.Password, mq.Host, mq.Port, mq.VHost)
 }
