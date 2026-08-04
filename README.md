@@ -34,10 +34,12 @@
 | 层级 | 技术 |
 |------|------|
 | 前端 | Vue 3 · Vite · Axios · Element Plus |
-| 后端 | Go 1.26 · Gin · GORM · Viper |
+| 后端 | Go 1.26 · Gin · Viper |
 | 数据库 | MySQL 8.0 |
-| 中间件 | JWT 认证 · CORS · 限流 · 请求超时 |
-| 部署 | Docker · Docker Compose · Nginx |
+| 消息队列 | RabbitMQ（异步任务：审计日志 / 状态同步 / 统计刷新） |
+| 中间件 | JWT 认证 · CORS · 限流 · 请求超时 · Worker Pool |
+| 并发优化 | Goroutine + Channel（产品列表 / 产品详情并发查询） |
+| 部署 | Docker · Docker Compose · Nginx（多阶段构建 + BuildKit 缓存） |
 
 ---
 
@@ -66,8 +68,16 @@ Supply_chain_traceability/
 │   └── middleware.go                # 认证 · CORS · 限流 · 超时
 │
 ├── pkg/
-│   └── utils/
-│       └── utils.go                 # 工具函数
+│   ├── utils/
+│   │   └── utils.go                 # 工具函数
+│   ├── mq/
+│   │   ├── connection.go            # RabbitMQ 连接管理 + 自动重连
+│   │   ├── publisher.go             # 任务发布（JSON 序列化 → Publish）
+│   │   └── consumer.go              # 消息消费（ACK/NACK + 重试）
+│   └── worker/
+│       ├── task.go                  # 任务类型定义（json.RawMessage Payload）
+│       ├── pool.go                  # Worker Pool 核心（MQ 消费模式）
+│       └── handlers.go              # 业务处理：审计日志 / 状态同步 / 统计刷新
 │
 ├── mysql_sql/
 │   ├── init.sql                     # 合并建表 + 种子数据
@@ -95,8 +105,8 @@ Supply_chain_traceability/
 │   ├── vite.config.js               # Vite 配置（含 API 代理）
 │   └── package.json
 │
-├── dockerfile                       # 多阶段构建（Node → Go → Nginx）
-├── docker-compose.yml               # 容器编排（MySQL + App）
+├── dockerfile                       # 多阶段构建（Node → Go → Nginx，BuildKit 缓存）
+├── docker-compose.yml               # 容器编排（MySQL + RabbitMQ + App）
 ├── nginx.conf                       # Nginx 反向代理
 ├── start.sh                         # 容器启动脚本
 ├── .env.example                     # 环境变量模板
@@ -114,9 +124,11 @@ Supply_chain_traceability/
 - 📦 **产品注册**：创建产品并可选附带初始供应链历史记录（事务写入）
 - 🔗 **溯源链**：按时间线展示产品从生产到交付的完整流转链路
 - 📊 **批量导入**：支持一次性导入多条供应链历史记录
+- ⚡ **并发查询**：产品列表 / 产品详情接口使用 Goroutine + Channel 并发查库（N+1 → 并行）
+- 📨 **异步任务队列**：基于 RabbitMQ 的 Worker Pool，审计日志 / 状态同步 / 统计刷新异步执行，不阻塞 HTTP 响应
+- ♻️ **任务可靠投递**：手动 ACK/NACK + 自动重试 + 断线重连，服务重启任务不丢失
 - 🌐 **CORS 跨域**：开发环境 Vite 代理 + 生产环境 Nginx 反向代理
-- ⚡ **限流保护**：单 IP 每秒 100 请求上限
-- 🛡 **安全防护**：参数校验、SQL 注入防护（预编译）、角色权限拦截
+- 🛡 **安全防护**：参数校验、SQL 注入防护（预编译）、角色权限拦截、单 IP 限流（100 req/s）
 
 ---
 
@@ -129,6 +141,8 @@ Supply_chain_traceability/
 | POST | `/api/v1/login` | 用户登录 |
 | POST | `/api/v1/refresh-token` | 刷新 Token |
 | GET | `/api/v1/products` | 获取所有产品（可选认证） |
+| GET | `/api/v1/products/concurrent` | 获取所有产品（并发查询版） |
+| GET | `/api/v1/products/concurrent/:product_id` | 获取产品详情（并发查询版） |
 | GET | `/api/v1/products/:product_id` | 获取产品详情（可选认证） |
 | GET | `/api/v1/products/:product_id/history` | 获取产品溯源历史 |
 | GET | `/api/v1/supply-history` | 获取所有历史记录 |
@@ -160,7 +174,8 @@ Supply_chain_traceability/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/health` | 健康检查 |
+| GET | `/health` | 健康检查（含 Worker 统计） |
+| GET | `/worker/stats` | Worker Pool 运行统计（任务总数/失败数/队列状态） |
 
 ---
 
@@ -191,6 +206,7 @@ vim .env
 ```env
 MYSQL_ROOT_PASSWORD=<你的 MySQL 密码>
 JWT_SECRET=<随机生成的密钥>
+RABBITMQ_PASSWORD=<你的 RabbitMQ 密码>
 ```
 
 > 生成随机密钥：`openssl rand -base64 32`
@@ -201,22 +217,34 @@ JWT_SECRET=<随机生成的密钥>
 docker compose up -d
 ```
 
-首次启动会自动完成：拉取镜像 → 编译前端 → 编译 Go 后端 → 初始化数据库。
+首次启动会自动完成：拉取镜像 → 编译前端 → 编译 Go 后端 → 初始化数据库 → 启动 RabbitMQ。
+由于 Dockerfile 使用 BuildKit 分层缓存，**增量构建仅需数秒**（只重编译变化的层）。
 
 ### 4. 验证
 
 ```bash
-# 检查容器状态
+# 检查容器状态（应看到 3 个容器：mysql / rabbitmq / app）
 docker compose ps
 
 # 测试 API
 docker exec supply-chain-app curl -s http://localhost:8080/health
+
+# 查看 Worker Pool 统计
+curl -s http://localhost/worker/stats
 
 # 测试前端
 curl -s -o /dev/null -w "%{http_code}" http://localhost:80/
 ```
 
 浏览器访问 `http://<服务器公网IP>`，使用预设管理员账号登录。
+
+### 5. RabbitMQ 管理界面（可选）
+
+```bash
+# 通过 SSH 隧道访问（不要对公网开放 15672 端口！）
+ssh -L 15672:localhost:15672 root@服务器IP
+# 浏览器打开 http://localhost:15672  (账号密码见 .env)
+```
 
 ---
 
@@ -227,6 +255,11 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:80/
 ```bash
 # 安装依赖
 go mod download
+
+# 需要先启动本地 RabbitMQ（Docker 方式）
+docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 \
+  -e RABBITMQ_DEFAULT_USER=supply_mq -e RABBITMQ_DEFAULT_PASS=SupplyMQ@2024 \
+  rabbitmq:3-management
 
 # 启动（监听 :8080）
 go run ./cmd/api/
@@ -253,6 +286,8 @@ npm run dev            # 监听 :3000，API 自动代理到 :8080
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `MYSQL_ROOT_PASSWORD` | MySQL root 密码 | `SupplyChain@2024` |
+| `RABBITMQ_USER` | RabbitMQ 账号 | `supply_mq` |
+| `RABBITMQ_PASSWORD` | RabbitMQ 密码 | `SupplyMQ@2024` |
 | `APP_PORT` | 应用对外端口 | `80` |
 | `GIN_MODE` | Gin 运行模式 | `release` |
 | `JWT_SECRET` | JWT 签名密钥 | `your-secret-key` |
@@ -261,6 +296,8 @@ npm run dev            # 监听 :3000，API 自动代理到 :8080
 | `DB_USER` | 数据库用户 | `root` |
 | `DB_PASSWORD` | 数据库密码 | 同 `MYSQL_ROOT_PASSWORD` |
 | `DB_NAME` | 数据库名 | `supply_chain` |
+| `MQ_HOST` | RabbitMQ 地址 | `localhost` |
+| `MQ_PORT` | RabbitMQ 端口 | `5672` |
 
 ---
 

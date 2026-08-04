@@ -44,3 +44,12 @@ gowatch.yml
 
 # 日志
 *.log
+
+# 压缩包 / 备份
+*.zip
+*.tar.gz
+*.tgz
+*.bak
+
+# SQL 初始化脚本（由 docker-compose 挂载进 MySQL，无需进应用镜像）
+mysql_sql/
