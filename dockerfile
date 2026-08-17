@@ -104,8 +104,10 @@ RUN apk add --no-cache curl tini
 WORKDIR /app
 
 # ---- 从第一阶段拷贝前端静态文件 ----
-# 只拷 dist 目录（Vue 构建产物），不含 node_modules 等垃圾
-COPY --from=frontend /web/dist /usr/share/nginx/html
+# ★ 拷贝到 /usr/share/nginx/html/supply_chain 子目录
+#   nginx.conf 的 location /supply_chain/ 匹配这个路径
+#   好处：一个服务器可部署多个项目，各占一个子目录互不干扰
+COPY --from=frontend /web/dist /usr/share/nginx/html/supply_chain
 
 # ---- 从第二阶段拷贝 Go 二进制 ----
 COPY --from=backend /app/supply_app /app/supply_app

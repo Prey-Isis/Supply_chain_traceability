@@ -4,8 +4,10 @@ import { ElMessage } from 'element-plus'
 import { token, clearLoginState } from './store'
 
 // 创建 axios 实例
+// ★ baseURL 带 /supply_chain 前缀：生产环境由 Nginx 剥离前缀后转发到后端
+//   开发环境由 Vite proxy 的 rewrite 剥离前缀
 const api = axios.create({
-  baseURL: '/api/v1',
+  baseURL: '/supply_chain/api/v1',
   timeout: 15000
 })
 

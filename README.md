@@ -227,17 +227,22 @@ docker compose up -d
 # 检查容器状态（应看到 3 个容器：mysql / rabbitmq / app）
 docker compose ps
 
-# 测试 API
+# 测试 API（容器内直连 Go 后端 8080，不走 Nginx 前缀）
 docker exec supply-chain-app curl -s http://localhost:8080/health
 
-# 查看 Worker Pool 统计
-curl -s http://localhost/worker/stats
+# 查看 Worker Pool 统计（需带前缀）
+curl -s http://localhost/supply_chain/api/v1/products | head -c 200
 
-# 测试前端
-curl -s -o /dev/null -w "%{http_code}" http://localhost:80/
+# 测试前端（带前缀返回 200）
+curl -s -o /dev/null -w "%{http_code}" http://localhost:80/supply_chain/
 ```
 
-浏览器访问 `http://<服务器公网IP>`，使用预设管理员账号登录。
+浏览器访问 `http://<服务器公网IP>/supply_chain`，使用预设管理员账号登录。
+访问根路径 `http://<服务器公网IP>/` 会自动 301 重定向到 `/supply_chain/`。
+
+> 📌 **路径前缀说明**：系统部署在 `/supply_chain` 子路径下，这是为了**一个服务器部署多个项目**时通过路径区分。
+> 如需修改前缀，改三处即可：`vite.config.js` 的 `base`、`src/api.js` 的 `baseURL`、`nginx.conf` 的两个 `location`。
+> 注意：修改前缀后前端必须重新构建（`npm run build`）。
 
 ### 5. RabbitMQ 管理界面（可选）
 
@@ -273,8 +278,10 @@ go run ./cmd/api/
 ```bash
 cd supply-chain-frontend
 npm install
-npm run dev            # 监听 :3000，API 自动代理到 :8080
+npm run dev            # 监听 :3000，访问 http://localhost:3000/supply_chain/
 ```
+
+> 💡 开发环境也带 `/supply_chain` 前缀（与生产一致），API 由 Vite proxy 剥离前缀后转发到 `:8080`。
 
 ### 数据库
 

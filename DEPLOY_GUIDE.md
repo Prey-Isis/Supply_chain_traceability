@@ -154,15 +154,18 @@ echo "===== 2. 健康检查（应返回 ok）====="
 docker exec supply-chain-app curl -s http://localhost:8080/health || echo "❌ 健康检查失败"
 
 echo ""
-echo "===== 3. 前端页面（80 端口）====="
-curl -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://localhost/ 2>/dev/null || echo "（端口未放行，见排查章节）"
+echo "===== 3. 前端页面（80 端口，带前缀）====="
+curl -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://localhost/supply_chain/ 2>/dev/null || echo "（端口未放行，见排查章节）"
 ```
+
+> 📌 **路径前缀**：系统访问路径为 `http://IP/supply_chain`（根路径 `/` 会自动 301 跳转过去），
+> 这是为了一个服务器部署多个项目时通过路径区分。
 
 ```bash
 cd Supply_chain_traceability
 
-echo "===== 登录测试（种子数据管理员账号）====="
-curl -s -X POST http://localhost/api/v1/login \
+echo "===== 登录测试（种子数据管理员账号，带前缀）====="
+curl -s -X POST http://localhost/supply_chain/api/v1/login \
   -H "Content-Type: application/json" \
   -d '{"Account":"11111111","PassWord":"123456"}' | head -c 300
 echo ""
@@ -241,7 +244,7 @@ docker ps --filter name=rabbitmq --format "{{.Status}}"
 
 如果以上步骤全部通过，你的供应链溯源系统已成功部署！
 
-- 前端访问：`http://<服务器公网IP>`
+- 前端访问：`http://<服务器公网IP>/supply_chain`
 - 管理员账号：`11111111` / `123456`（种子数据）
 - API 文档：见项目 README.md
 
