@@ -30,7 +30,13 @@
 # ============================================================
 # 第一阶段：构建 Vue 前端（工具镜像：node）
 # ============================================================
-FROM node:22-alpine AS frontend
+# ★ 国内镜像源：docker.m.daocloud.io 是 DaoCloud 提供的 Docker Hub 镜像仓库
+#   国内云服务器直接拉 docker.io 会被网络限制（报 not found），
+#   加前缀后走国内镜像，正常拉取。若该源不可用，可替换为：
+#     - registry.cn-hangzhou.aliyuncs.com  (阿里云，需自己账号前缀)
+#     - hub-mirror.c.163.com              (网易)
+# ============================================================
+FROM docker.m.daocloud.io/library/node:22-alpine AS frontend
 
 WORKDIR /web
 
@@ -59,7 +65,7 @@ RUN npm run build
 # ============================================================
 # 第二阶段：构建 Go 后端（工具镜像：golang）
 # ============================================================
-FROM golang:1.26-alpine AS backend
+FROM docker.m.daocloud.io/library/golang:1.26-alpine AS backend
 
 WORKDIR /app
 
@@ -92,7 +98,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # 第三阶段：最终运行镜像（基础镜像：nginx，含 Go 应用 + Nginx）
 # ============================================================
 # nginx:alpine 约 23MB，自带 nginx 可执行文件，alpine 极简 Linux
-FROM nginx:alpine
+# ★ 同样使用国内镜像源（MySQL/RabbitMQ 镜像在 docker-compose 里也需注意）
+FROM docker.m.daocloud.io/library/nginx:alpine
 
 # 安装运行需要的工具
 #   curl    - 健康检查（Docker HEALTHCHECK 和启动脚本都要用）

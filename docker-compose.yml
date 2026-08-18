@@ -7,7 +7,8 @@
 services:
   # MySQL 数据库
   mysql:
-    image: mysql:8.0
+    # ★ 国内镜像源（服务器直接拉 docker.io 会失败）
+    image: docker.m.daocloud.io/library/mysql:8.0
     container_name: supply-chain-mysql
     restart: always
     environment:
@@ -39,7 +40,8 @@ services:
 
   # RabbitMQ 消息队列
   rabbitmq:
-    image: rabbitmq:3-management
+    # ★ 国内镜像源
+    image: docker.m.daocloud.io/library/rabbitmq:3-management
     container_name: supply-chain-rabbitmq
     restart: always
     environment:
