@@ -212,14 +212,28 @@ RABBITMQ_PASSWORD=<你的 RabbitMQ 密码>
 
 > 生成随机密钥：`openssl rand -base64 32`
 
-### 3. 启动
+### 3. 构建 & 启动
 
 ```bash
+# ✅ 正确姿势：先串行构建，再启动（分两步）
+# 【为什么必须分两步？】
+#   BuildKit 默认会并行构建前端和后端两个 stage，内存峰值翻倍。
+#   2G 小内存服务器并行构建会 OOM（vite 打包 + go 编译同时跑）。
+#   --no-parallel 强制串行：一次只编译一个阶段，内存峰值减半。
+docker compose build --no-parallel
 docker compose up -d
 ```
 
+> ❌ 错误姿势：`docker compose up -d --build` 会并行构建 + 同时启动旧容器，小内存服务器必崩。
+
 首次启动会自动完成：拉取镜像 → 编译前端 → 编译 Go 后端 → 初始化数据库 → 启动 RabbitMQ。
 由于 Dockerfile 使用 BuildKit 分层缓存，**增量构建仅需数秒**（只重编译变化的层）。
+
+> 💡 **小内存服务器（2G）额外建议**：
+> 1. 加 Swap 交换分区：`fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`
+>    （并写入 `/etc/fstab` 开机自动挂载）
+> 2. 构建前先停掉占用大的其他容器（`docker stop <容器名>`），构建完再启动
+> 3. Dockerfile 已内置内存限制：前端 Node 堆内存 1G、Go 编译 `-p=1` 串行
 
 ### 4. 验证
 

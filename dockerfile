@@ -27,6 +27,14 @@
 # 声明使用新版 Dockerfile 语法（支持 cache mount 等 BuildKit 特性）
 # syntax=docker/dockerfile:1
 
+# ★ 小内存服务器构建提示（2G 内存）：
+#   BuildKit 默认会并行构建多个 stage（前端 + 后端同时跑），内存峰值翻倍！
+#   【正确构建姿势 - 关键】
+#     第一步：docker compose build --no-parallel   ← 串行构建，一次只编译一个阶段
+#     第二步：docker compose up -d                 ← 构建完成后才启动容器
+#   千万不要直接 docker compose up -d --build（会并行构建 + 同时启动旧容器，内存爆炸）
+#   配合系统 swap（见 README），2G 内存可顺利完成构建。
+
 # ============================================================
 # 第一阶段：构建 Vue 前端（工具镜像：node）
 # ============================================================
@@ -43,15 +51,21 @@ WORKDIR /web
 # 设置 npm 镜像源加速（国内用户）
 RUN npm config set registry https://registry.npmmirror.com
 
+# ★ 限制 Node 堆内存（适合 2G 内存小服务器）
+#   vite/rollup 打包默认会用到上限 4GB，1.5G 可用内存会 OOM
+#   显式限制为 1024MB，超出后配合 swap 也不会直接被杀
+ENV NODE_OPTIONS="--max-old-space-size=1024"
+
 # ★ 缓存优化关键点 1：先只复制 package*.json（依赖清单）
 #   package.json / package-lock.json 不常变 → 这一层缓存长期有效
 COPY supply-chain-frontend/package*.json ./
 
 # 安装依赖（只有 package.json 变化时才会重新执行这步）
 # --cache-dir 配合 BuildKit cache mount：npm 下载的包缓存到 /npm-cache
+# --no-audit --no-fund：跳过安全审计和捐赠提示，加快安装
 # 下次构建即使需要重装，也能秒级从本地缓存命中，不用重新上网下载
 RUN --mount=type=cache,target=/npm-cache \
-    npm ci --prefer-offline --cache /npm-cache
+    npm ci --prefer-offline --no-audit --no-fund --cache /npm-cache
 
 # ★ 缓存优化关键点 2：依赖装完，才复制源码
 #   源码变化 → 只重跑"构建"，不重跑"装依赖"
@@ -72,7 +86,9 @@ WORKDIR /app
 # 设置 Go 代理加速（国内用户）
 ENV GOPROXY=https://goproxy.cn,direct \
     CGO_ENABLED=0 \
-    GOOS=linux
+    GOOS=linux \
+    GOMAXPROCS=1 \
+    GOGC=100
 
 # ★ 缓存优化关键点 3：先只复制依赖清单，下载依赖
 #   go.mod/go.sum 不常变 → 这层缓存长期有效
@@ -88,11 +104,13 @@ COPY --link . .
 # 参数说明：
 #   -ldflags="-w -s"  : -w 去掉 DWARF 调试信息, -s 去掉符号表 → 二进制体积减半
 #   -trimpath        : 去掉编译时的绝对路径信息 → 更小更安全
+#   -p=1             : ★ 限制 Go 编译并发度（一次只编译 1 个包）
+#                       降低编译期内存峰值，适合 2G 内存小服务器
 #   ./cmd/api/       : Go 主入口在 cmd/api 目录（module 名为 main）
 # --mount=type=cache：Go 编译缓存持久化到 /root/.cache/go-build
 #                     改一行代码重编译时，只重编受影响的包，秒级完成
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags="-w -s" -o supply_app ./cmd/api/
+    go build -p=1 -trimpath -ldflags="-w -s" -o supply_app ./cmd/api/
 
 # ============================================================
 # 第三阶段：最终运行镜像（基础镜像：nginx，含 Go 应用 + Nginx）

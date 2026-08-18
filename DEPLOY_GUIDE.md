@@ -124,15 +124,25 @@ echo "⚠️  如果丢失，需删除 mysql 数据卷重新初始化！"
 > - MySQL 首次启动自动执行 `mysql_sql/init.sql` 建表 + 导入种子数据
 >
 > ⏱️ 整体耗时约 3-10 分钟，耐心等待。
+>
+> ⚠️ **必须分两步（串行构建）**，原因：
+> - BuildKit 默认**并行**构建前端 + 后端两个 stage，内存峰值翻倍
+> - 2G 小内存服务器并行构建会 OOM（vite 打包 + go 编译同时跑）
+> - `--no-parallel` 强制一次只编译一个阶段，内存峰值减半
+> - ❌ 不要用 `docker compose up -d --build`（并行构建 + 起容器，内存爆炸）
 
 ```bash
 cd Supply_chain_traceability
 
-echo "🚀 开始构建并启动容器（首次构建较慢）..."
-docker compose up -d --build
+echo "🚀 第 1 步：串行构建镜像（一次编译一个阶段，防内存爆）..."
+docker compose build --no-parallel
 
 echo ""
-echo "✅ 构建启动命令已执行，查看状态:"
+echo "🚀 第 2 步：启动容器..."
+docker compose up -d
+
+echo ""
+echo "✅ 构建启动完成，查看状态:"
 docker compose ps
 ```
 
@@ -187,12 +197,15 @@ docker compose logs -f app
 
 ### 代码更新后重新部署
 
+> ⚠️ 同样分两步串行构建（原因同上：防小内存 OOM）
+
 ```bash
 cd Supply_chain_traceability
 
 echo "===== 代码更新后重新部署 ====="
 git pull
-docker compose up -d --build
+docker compose build --no-parallel   # 先串行构建（增量，秒级）
+docker compose up -d                 # 再启动新容器
 echo "✅ 已更新到最新版本"
 ```
 
@@ -232,7 +245,7 @@ docker ps --filter name=rabbitmq --format "{{.Status}}"
 | 现象 | 可能原因 | 解决 |
 |------|---------|------|
 | `docker: command not found` | 未安装 Docker | `apt install docker.io` 或参考官方文档 |
-| 构建报 `unknown instruction: MOUNT` | Docker 版本过旧，不支持 BuildKit | `DOCKER_BUILDKIT=0 docker compose up -d --build` 降级 |
+| 构建报 `unknown instruction: MOUNT` | Docker 版本过旧，不支持 BuildKit | `DOCKER_BUILDKIT=0 docker compose build --no-parallel` 降级 |
 | MySQL 连接失败 | 密码不匹配 | 检查 `.env` 的 `MYSQL_ROOT_PASSWORD`，与容器初始化一致 |
 | 前端打不开 | 安全组未放行 80 端口 | 阿里云控制台 → 安全组 → 入方向放行 TCP 80 |
 | RabbitMQ 连接失败 | MQ 未就绪或密码不对 | `docker compose logs rabbitmq` 查看日志 |
