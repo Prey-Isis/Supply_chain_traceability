@@ -19,6 +19,7 @@
 - [API 文档](#-api-文档)
 - [部署手册](DEPLOY_GUIDE.md)
 - [快速部署](#-快速部署)
+- [低内存服务器部署指南](#-低内存服务器部署指南2g-及以下)
 - [本地开发](#-本地开发)
 - [环境变量](#-环境变量)
 
@@ -266,6 +267,122 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:80/supply_chain/
 ssh -L 15672:localhost:15672 root@服务器IP
 # 浏览器打开 http://localhost:15672  (账号密码见 .env)
 ```
+
+---
+
+## 🐌 低内存服务器部署指南（2G 及以下）
+
+> 云服务器常见配置是 2G 内存（还跑着其他服务时可用内存更少），
+> Docker 多阶段构建（vite 打包 + Go 编译）容易 OOM。本指南按"内存紧张等级"递进。
+
+### 0. 先诊断：确认内存到底够不够
+
+```bash
+# 内存 + swap 使用情况
+free -h
+
+# 看谁被杀过（OOM killer 记录）
+dmesg | grep -i "oom\|killed"
+
+# swap 是否生效
+swapon --show
+```
+
+### 1. 建立 Swap 交换分区（内存不足的"第二层保险"）
+
+> Swap 用磁盘充当内存，**让系统不因瞬时内存峰值直接崩掉**。2G 内存建议配 2G swap。
+
+```bash
+# 创建 2G swap 文件（fallocate 秒建，比 dd 快）
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile              # 只允许 root 读写（安全）
+sudo mkswap /swapfile                 # 格式化为 swap
+sudo swapon /swapfile                 # 启用
+
+# 开机自动挂载（防止重启后失效）
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# 验证
+free -h                               # Swap 一栏应显示 2G
+```
+
+> 若 `fallocate` 不支持（个别文件系统），用传统方式：
+> `sudo dd if=/dev/zero of=/swapfile bs=1M count=2048`
+
+### 2. 构建前释放内存（关键！）
+
+> 构建是内存峰值最高的时刻。先停掉不用的容器，把内存让给构建。
+
+```bash
+# ① 停掉本项目的运行容器（MySQL/RabbitMQ 各占 ~512M，很能抢）
+cd Supply_chain_traceability
+docker compose down
+
+# ② 清理构建缓存垃圾（安全，只删无用缓存）
+docker system prune -f
+
+# ③ 确认内存空出来了
+free -h
+
+# ④ 构建 + 启动
+docker compose build
+docker compose up -d
+```
+
+### 3. 让系统更积极使用 Swap（小内存机器强烈建议）
+
+> Linux 默认 `swappiness=60`（60% 内存才用 swap）。小内存机器调到 100，
+> 让系统**尽早把不常用数据挪到 swap**，给构建留出物理内存。
+
+```bash
+# 立即生效
+echo 100 > /proc/sys/vm/swappiness
+
+# 永久生效（写入 sysctl 配置）
+echo 'vm.swappiness = 100' | sudo tee -a /etc/sysctl.conf
+```
+
+### 4. 限制 BuildKit 并行构建（内存峰值减半）
+
+> 本 Dockerfile 是**多阶段构建**（frontend / backend / 最终镜像 3 个 stage）。
+> BuildKit 默认并行执行这些 stage，内存峰值 = 各阶段之和（vite 1G + go 编译 500M + ...）。
+> 用环境变量强制**一次只构建一个 stage**，峰值降到最大的那个（约 1G）。
+
+```bash
+# ★ 串行构建：一次只编译一个阶段
+BUILDKIT_MAX_PARALLELISM=1 docker compose build
+docker compose up -d
+```
+
+### 5. 终极方案：本地构建，服务器只加载（服务器零构建压力）
+
+> 如果服务器内存实在挤不出（还有其他重要服务），
+> 就在**本地电脑**（内存大）构建镜像，打包传过去，服务器只 `docker load`。
+
+```bash
+# ① 本地 Windows（需装 Docker Desktop），在项目根目录执行：
+docker build -t supply-chain-app:latest .
+docker save supply-chain-app:latest -o supply-app.tar
+
+# ② 传到服务器（scp 走 SSH，比镜像仓库稳）
+scp supply-app.tar developer@服务器IP:/home/developer/
+
+# ③ 服务器上加载（秒完成，不构建！）
+docker load -i /home/developer/supply-app.tar
+
+# ④ docker-compose.yml 的 app 服务加一行，改用本地镜像
+#    image: supply-chain-app:latest
+#    然后 docker compose up -d 直接启动
+```
+
+### 6. Dockerfile 已内置的内存保护（了解即可）
+
+| 限制 | 位置 | 作用 |
+|------|------|------|
+| `NODE_OPTIONS=--max-old-space-size=1024` | 前端阶段 | vite 打包堆内存封顶 1G |
+| `GOMAXPROCS=1` + `GOGC=100` | 后端阶段 | Go 编译器单核运行 |
+| `go build -p=1` | 后端阶段 | 一次只编译 1 个包 |
+| `mem_limit`（512m/512m/256m） | docker-compose | MySQL/RabbitMQ/App 运行期内存上限 |
 
 ---
 

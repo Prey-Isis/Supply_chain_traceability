@@ -241,7 +241,97 @@ docker ps --filter name=rabbitmq --format "{{.Status}}"
 
 ---
 
-## 7️⃣ 常见问题排查
+## 🆕 7️⃣ 内存紧张时的操作（2G 及以下服务器必看）
+
+> 2G 内存构建多阶段 Docker 镜像容易 OOM（vite 打包 + Go 编译峰值高）。
+> 按以下步骤递进处理，从"加 swap"到"本地构建"共 5 招。
+
+### 7.1 先诊断内存状态
+
+```bash
+free -h                            # 内存 + swap 使用情况
+dmesg | grep -i "oom\|killed"      # 看谁被 OOM killer 杀过
+swapon --show                      # swap 是否生效
+```
+
+### 7.2 建立 Swap 交换分区（第一招）
+
+> Swap 用磁盘当内存，系统瞬时内存峰值时不会直接崩。2G 内存建议配 2G swap。
+
+```bash
+# 创建 2G swap 文件（fallocate 秒建）
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+# 开机自动挂载
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# 验证
+free -h
+```
+
+> `fallocate` 不支持时用：`sudo dd if=/dev/zero of=/swapfile bs=1M count=2048`
+
+### 7.3 构建前释放内存（第二招）
+
+> 构建是内存峰值时刻。先停容器、清缓存，把内存让给构建。
+
+```bash
+cd Supply_chain_traceability
+
+docker compose down          # 停 MySQL/RabbitMQ（各占 ~512M）
+docker system prune -f       # 清构建缓存（安全）
+free -h                      # 确认内存空出来
+
+docker compose build         # 再构建
+docker compose up -d
+```
+
+### 7.4 让系统更积极用 Swap（第三招）
+
+```bash
+# 立即生效（默认 60，小内存调到 100）
+echo 100 > /proc/sys/vm/swappiness
+
+# 永久生效
+echo 'vm.swappiness = 100' | sudo tee -a /etc/sysctl.conf
+```
+
+### 7.5 限制 BuildKit 串行构建（第四招）
+
+> 多阶段构建默认**并行**执行各 stage，内存峰值 = 各阶段之和。
+> 强制一次只构建一个 stage，峰值降到最大的那个（约 1G）。
+
+```bash
+BUILDKIT_MAX_PARALLELISM=1 docker compose build
+docker compose up -d
+```
+
+### 7.6 终极：本地构建，服务器只加载（第五招）
+
+> 服务器内存实在挤不出时，在本地（内存大）构建，打包传过去。
+
+```bash
+# ① 本地电脑（Windows + Docker Desktop）项目根目录：
+docker build -t supply-chain-app:latest .
+docker save supply-chain-app:latest -o supply-app.tar
+
+# ② 传到服务器
+scp supply-app.tar developer@服务器IP:/home/developer/
+
+# ③ 服务器加载（不构建，秒完成）
+docker load -i /home/developer/supply-app.tar
+
+# ④ docker-compose.yml 的 app 服务加一行：
+#    image: supply-chain-app:latest
+#    然后 docker compose up -d
+```
+
+---
+
+## 8️⃣ 常见问题排查
 
 | 现象 | 可能原因 | 解决 |
 |------|---------|------|
