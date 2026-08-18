@@ -12,8 +12,8 @@ services:
     container_name: supply-chain-mysql
     restart: always
     # ★ 内存上限：MySQL 默认会吃到几百 MB，2G 小服务器必须限制
-    #   512M 足够单机小项目（InnoDB buffer pool 默认会自适应）
-    mem_limit: 512m
+    #   384M 足够单机小项目（降低以给系统腾内存，避免触发 RabbitMQ 水位告警）
+    mem_limit: 384m
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-SupplyChain@2024}
       MYSQL_DATABASE: supply_chain
@@ -48,12 +48,18 @@ services:
     container_name: supply-chain-rabbitmq
     restart: always
     # ★ 内存上限：RabbitMQ（Erlang VM）默认内存水位是物理内存 40%，很能吃
-    #   512M 足够本项目的任务队列规模
-    mem_limit: 512m
+    #   512M 在 2G 小服务器上容易触发 OOM（机器还有其他服务在跑）
+    #   调高到 768M，同时设置 RABBITMQ_VM_MEMORY_HIGH_WATERMARK 让 Erlang VM 适配容器限制
+    mem_limit: 768m
     environment:
       # 默认账号密码（生产环境通过 .env 覆盖）
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-supply_mq}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-SupplyMQ@2024}
+      # ★★ 关键修复：内存水位用"绝对值"而非默认的"物理内存40%"
+      #   2G 机器默认 40% = 800M，系统空闲内存一跌破 800M 就触发告警拒接连接
+      #   设为 512MiB 绝对阈值：只有系统空闲内存低于 512M 才触发，大幅减少误报
+      #   （相对值 0.4/0.6 是乘物理内存，绝对值更可控，官方推荐小内存机器用绝对值）
+      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: 512MiB
       TZ: Asia/Shanghai
     ports:
       # AMQP 协议端口：Go 服务连接用
