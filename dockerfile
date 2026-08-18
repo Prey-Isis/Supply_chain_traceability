@@ -28,12 +28,15 @@
 # syntax=docker/dockerfile:1
 
 # ★ 小内存服务器构建提示（2G 内存）：
-#   BuildKit 默认会并行构建多个 stage（前端 + 后端同时跑），内存峰值翻倍！
-#   【正确构建姿势 - 关键】
-#     第一步：docker compose build --no-parallel   ← 串行构建，一次只编译一个阶段
-#     第二步：docker compose up -d                 ← 构建完成后才启动容器
-#   千万不要直接 docker compose up -d --build（会并行构建 + 同时启动旧容器，内存爆炸）
-#   配合系统 swap（见 README），2G 内存可顺利完成构建。
+#   Compose V2 的 docker compose build 没有 --no-parallel 参数（那是 V1 的），
+#   本项目只有 app 一个服务需要构建，Compose 层面不存在多服务并行问题。
+#   【正确构建姿势】
+#     第一步：docker compose build              ← 构建镜像
+#     第二步：docker compose up -d              ← 构建完成后才启动容器
+#   【可选：进一步限制 BuildKit 多阶段并行】
+#     如果 2G 内存还紧张，可用环境变量限制 stage 并行（一次只构建一个阶段）：
+#       BUILDKIT_MAX_PARALLELISM=1 docker compose build
+#   本 Dockerfile 已内置内存限制（前端 Node 堆 1G、Go 编译 -p=1），配合 swap 可顺利构建。
 
 # ============================================================
 # 第一阶段：构建 Vue 前端（工具镜像：node）

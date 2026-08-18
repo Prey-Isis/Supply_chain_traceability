@@ -215,16 +215,16 @@ RABBITMQ_PASSWORD=<你的 RabbitMQ 密码>
 ### 3. 构建 & 启动
 
 ```bash
-# ✅ 正确姿势：先串行构建，再启动（分两步）
-# 【为什么必须分两步？】
-#   BuildKit 默认会并行构建前端和后端两个 stage，内存峰值翻倍。
-#   2G 小内存服务器并行构建会 OOM（vite 打包 + go 编译同时跑）。
-#   --no-parallel 强制串行：一次只编译一个阶段，内存峰值减半。
-docker compose build --no-parallel
+# ✅ 分两步：先构建镜像，再启动容器
+# 【为什么不写 --no-parallel？】
+#   Compose V2 的 docker compose build 没有 --no-parallel 参数（那是 V1 的）。
+#   本项目只有 app 一个服务需要构建（mysql/rabbitmq 是直接拉镜像），
+#   不存在多服务并行问题，直接 build 即可。
+docker compose build
 docker compose up -d
 ```
 
-> ❌ 错误姿势：`docker compose up -d --build` 会并行构建 + 同时启动旧容器，小内存服务器必崩。
+> ❌ 不要用 `docker compose up -d --build`（构建 + 启动混一起，出错时不好排查）。
 
 首次启动会自动完成：拉取镜像 → 编译前端 → 编译 Go 后端 → 初始化数据库 → 启动 RabbitMQ。
 由于 Dockerfile 使用 BuildKit 分层缓存，**增量构建仅需数秒**（只重编译变化的层）。
@@ -233,7 +233,8 @@ docker compose up -d
 > 1. 加 Swap 交换分区：`fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`
 >    （并写入 `/etc/fstab` 开机自动挂载）
 > 2. 构建前先停掉占用大的其他容器（`docker stop <容器名>`），构建完再启动
-> 3. Dockerfile 已内置内存限制：前端 Node 堆内存 1G、Go 编译 `-p=1` 串行
+> 3. 内存还紧张可用：`BUILDKIT_MAX_PARALLELISM=1 docker compose build`（限制 BuildKit 一次只构建一个 stage）
+> 4. Dockerfile 已内置内存限制：前端 Node 堆内存 1G、Go 编译 `-p=1` 串行
 
 ### 4. 验证
 

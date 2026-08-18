@@ -125,17 +125,18 @@ echo "⚠️  如果丢失，需删除 mysql 数据卷重新初始化！"
 >
 > ⏱️ 整体耗时约 3-10 分钟，耐心等待。
 >
-> ⚠️ **必须分两步（串行构建）**，原因：
-> - BuildKit 默认**并行**构建前端 + 后端两个 stage，内存峰值翻倍
-> - 2G 小内存服务器并行构建会 OOM（vite 打包 + go 编译同时跑）
-> - `--no-parallel` 强制一次只编译一个阶段，内存峰值减半
-> - ❌ 不要用 `docker compose up -d --build`（并行构建 + 起容器，内存爆炸）
+> ⚠️ **分两步构建**，原因：
+> - 先构建镜像、再启动容器，出错时便于定位（是构建失败还是启动失败）
+> - ❌ 不要用 `docker compose up -d --build`（构建 + 启动混一起，不好排查）
+> - 注：Compose V2 的 `docker compose build` **没有** `--no-parallel` 参数（那是 V1 的）
+> - 本项目只有 app 一个服务需要构建，不存在多服务并行问题
+> - 2G 内存紧张时可用：`BUILDKIT_MAX_PARALLELISM=1 docker compose build`（限制 BuildKit 一次只构建一个 stage）
 
 ```bash
 cd Supply_chain_traceability
 
-echo "🚀 第 1 步：串行构建镜像（一次编译一个阶段，防内存爆）..."
-docker compose build --no-parallel
+echo "🚀 第 1 步：构建镜像..."
+docker compose build
 
 echo ""
 echo "🚀 第 2 步：启动容器..."
@@ -197,14 +198,14 @@ docker compose logs -f app
 
 ### 代码更新后重新部署
 
-> ⚠️ 同样分两步串行构建（原因同上：防小内存 OOM）
+> ⚠️ 同样分两步（先构建后启动，便于排查）
 
 ```bash
 cd Supply_chain_traceability
 
 echo "===== 代码更新后重新部署 ====="
 git pull
-docker compose build --no-parallel   # 先串行构建（增量，秒级）
+docker compose build                 # 先构建镜像（增量，秒级）
 docker compose up -d                 # 再启动新容器
 echo "✅ 已更新到最新版本"
 ```
@@ -245,7 +246,7 @@ docker ps --filter name=rabbitmq --format "{{.Status}}"
 | 现象 | 可能原因 | 解决 |
 |------|---------|------|
 | `docker: command not found` | 未安装 Docker | `apt install docker.io` 或参考官方文档 |
-| 构建报 `unknown instruction: MOUNT` | Docker 版本过旧，不支持 BuildKit | `DOCKER_BUILDKIT=0 docker compose build --no-parallel` 降级 |
+| 构建报 `unknown instruction: MOUNT` | Docker 版本过旧，不支持 BuildKit | `DOCKER_BUILDKIT=0 docker compose build` 降级 |
 | MySQL 连接失败 | 密码不匹配 | 检查 `.env` 的 `MYSQL_ROOT_PASSWORD`，与容器初始化一致 |
 | 前端打不开 | 安全组未放行 80 端口 | 阿里云控制台 → 安全组 → 入方向放行 TCP 80 |
 | RabbitMQ 连接失败 | MQ 未就绪或密码不对 | `docker compose logs rabbitmq` 查看日志 |
