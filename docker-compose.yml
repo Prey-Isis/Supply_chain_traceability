@@ -55,11 +55,11 @@ services:
       # 默认账号密码（生产环境通过 .env 覆盖）
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-supply_mq}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-SupplyMQ@2024}
-      # ★★ 关键修复：内存水位用"绝对值"而非默认的"物理内存40%"
-      #   2G 机器默认 40% = 800M，系统空闲内存一跌破 800M 就触发告警拒接连接
-      #   设为 512MiB 绝对阈值：只有系统空闲内存低于 512M 才触发，大幅减少误报
-      #   （相对值 0.4/0.6 是乘物理内存，绝对值更可控，官方推荐小内存机器用绝对值）
-      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: 512MiB
+      # ★★ 关键修复：内存水位用相对值（格式最安全，官方主推）
+      #   踩坑记录：绝对值写法 512MiB 在某些 RabbitMQ 版本启动直接崩（exit 1）
+      #   相对值 0.5 = 物理内存的 50% = 2G×0.5 = 1G 阈值
+      #   （默认 0.4 = 800M，系统空闲跌破 800M 就拒接连接；0.5 更宽松减少误报）
+      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: 0.5
       TZ: Asia/Shanghai
     ports:
       # AMQP 协议端口：Go 服务连接用
