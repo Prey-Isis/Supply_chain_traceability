@@ -111,6 +111,8 @@ Supply_chain_traceability/
 ├── docker-compose.yml               # 容器编排（MySQL + RabbitMQ + App）
 ├── nginx.conf                       # Nginx 反向代理
 ├── start.sh                         # 容器启动脚本
+├── rabbitmq/
+│   └── rabbitmq.conf                # RabbitMQ 配置（内存水位等）
 ├── .env.example                     # 环境变量模板
 ├── .dockerignore
 ├── go.mod
@@ -375,14 +377,19 @@ docker load -i /home/developer/supply-app.tar
 #    然后 docker compose up -d 直接启动
 ```
 
-### 6. Dockerfile 已内置的内存保护（了解即可）
+### 6. Docker 已内置的内存保护（了解即可）
 
 | 限制 | 位置 | 作用 |
 |------|------|------|
-| `NODE_OPTIONS=--max-old-space-size=1024` | 前端阶段 | vite 打包堆内存封顶 1G |
-| `GOMAXPROCS=1` + `GOGC=100` | 后端阶段 | Go 编译器单核运行 |
-| `go build -p=1` | 后端阶段 | 一次只编译 1 个包 |
-| `mem_limit`（512m/512m/256m） | docker-compose | MySQL/RabbitMQ/App 运行期内存上限 |
+| `NODE_OPTIONS=--max-old-space-size=1024` | Dockerfile 前端阶段 | vite 打包堆内存封顶 1G |
+| `GOMAXPROCS=1` + `GOGC=100` | Dockerfile 后端阶段 | Go 编译器单核运行 |
+| `go build -p=1` | Dockerfile 后端阶段 | 一次只编译 1 个包 |
+| `mem_limit`（384m/768m/512m） | docker-compose | MySQL/RabbitMQ/App 运行期内存上限 |
+| `rabbitmq/rabbitmq.conf` | 配置文件挂载 | RabbitMQ 内存水位 0.5（2G 机器放宽，避免误告警拒接连接） |
+
+> ⚠️ **RabbitMQ 配置注意**：新版 RabbitMQ 已**弃用** `RABBITMQ_VM_MEMORY_HIGH_WATERMARK` 环境变量，
+> 设置它会直接启动失败（`deprecated environment variables detected`）。
+> 内存水位等高级配置必须用配置文件（本项目的 `rabbitmq/rabbitmq.conf`）挂载。
 
 ---
 
@@ -395,9 +402,12 @@ docker load -i /home/developer/supply-app.tar
 go mod download
 
 # 需要先启动本地 RabbitMQ（Docker 方式）
+# ⚠️ 注意：不要设 RABBITMQ_VM_MEMORY_HIGH_WATERMARK 环境变量（新版已弃用，会启动失败）
+# 需要自定义内存水位等配置时，用 -v 挂载 rabbitmq/rabbitmq.conf
 docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 \
   -e RABBITMQ_DEFAULT_USER=supply_mq -e RABBITMQ_DEFAULT_PASS=SupplyMQ@2024 \
-  rabbitmq:3-management
+  -v "$(pwd)/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro" \
+  docker.m.daocloud.io/library/rabbitmq:3-management
 
 # 启动（监听 :8080）
 go run ./cmd/api/

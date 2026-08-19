@@ -339,7 +339,8 @@ docker load -i /home/developer/supply-app.tar
 | 构建报 `unknown instruction: MOUNT` | Docker 版本过旧，不支持 BuildKit | `DOCKER_BUILDKIT=0 docker compose build` 降级 |
 | MySQL 连接失败 | 密码不匹配 | 检查 `.env` 的 `MYSQL_ROOT_PASSWORD`，与容器初始化一致 |
 | 前端打不开 | 安全组未放行 80 端口 | 阿里云控制台 → 安全组 → 入方向放行 TCP 80 |
-| RabbitMQ 连接失败 | MQ 未就绪或密码不对 | `docker compose logs rabbitmq` 查看日志 |
+| RabbitMQ 连接失败（容器 Restarting） | 设置了已弃用的环境变量 `RABBITMQ_VM_MEMORY_HIGH_WATERMARK` | **移除该环境变量**，改用配置文件 `rabbitmq/rabbitmq.conf` 挂载设置内存水位 |
+| RabbitMQ 连接失败（日志报 system_memory_high_watermark 告警） | 2G 机器默认内存水位 40%(800M)，系统空闲跌破即拒接连接 | `rabbitmq/rabbitmq.conf` 已设 `vm_memory_high_watermark.relative = 0.5` 放宽；加 swap + swappiness=100 |
 | 数据初始化失败 | init.sql 未执行 | 删除 mysql 数据卷重新初始化（`docker compose down -v`） |
 
 ---
