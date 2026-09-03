@@ -2,7 +2,7 @@
 
 > 本手册将引导你完成：**拉取代码 → 环境检查 → 配置环境变量 → Docker 构建 → 启动 → 验证 → 运维**。
 >
-> 技术栈：**Go + Gin 后端 / Vue3 前端 / MySQL / RabbitMQ / Nginx / Docker Compose**
+> 技术栈：**Go + Gin 后端 / Vue3 前端 / MySQL / RabbitMQ / Nginx / Docker Compose / K8s Watcher（可选）**
 
 ---
 
@@ -342,6 +342,58 @@ docker load -i /home/developer/supply-app.tar
 | RabbitMQ 连接失败（容器 Restarting） | 设置了已弃用的环境变量 `RABBITMQ_VM_MEMORY_HIGH_WATERMARK` | **移除该环境变量**，改用配置文件 `rabbitmq/rabbitmq.conf` 挂载设置内存水位 |
 | RabbitMQ 连接失败（日志报 system_memory_high_watermark 告警） | 2G 机器默认内存水位 40%(800M)，系统空闲跌破即拒接连接 | `rabbitmq/rabbitmq.conf` 已设 `vm_memory_high_watermark.relative = 0.5` 放宽；加 swap + swappiness=100 |
 | 数据初始化失败 | init.sql 未执行 | 删除 mysql 数据卷重新初始化（`docker compose down -v`） |
+| watcher 日志持续报 Forbidden / 403 | `k8s-watcher/rbac.yaml` 未部署或 ServiceAccount 名不匹配 | `kubectl apply -f k8s-watcher/rbac.yaml` |
+| watcher Pod ImagePullBackOff | 本地镜像未构建 | 先执行 `docker build -t supply-chain-watcher:latest ./k8s-watcher` |
+| Pod 超阈值但钉钉收不到 | 关键词不匹配 / 加签错误 / Webhook 留空（DRY-RUN） | 日志搜 `errcode`（310000 = 安全校验失败）；确认 deploy.yaml 已填 URL；机器人关键词需包含「告警」 |
+
+---
+
+## 🆕 9️⃣ K8s Pod 重启告警监视器（可选 · k8s-watcher）
+
+> ⚠️ **与主服务的 Docker Compose 部署相互独立**。主服务跑在单机 Docker 上时本节可完全跳过；
+> 只有把项目部署到 Kubernetes（如 Docker Desktop 自带集群）时才有意义。
+>
+> 功能：实时监听集群内所有 Pod，某个 Pod 的容器累计重启**超过 3 次**（反复崩溃）时，
+> 自动调用钉钉群机器人推送告警。配置项、告警行为、详细说明见 README.md「K8s Pod 监视器」章节。
+
+### 9.1 创建钉钉机器人（一次即可）
+
+群设置 → 机器人 → 添加 → **自定义（通过 Webhook 接入）**；
+安全设置同时勾选 **自定义关键词**（填 `告警`）和 **加签**（记下 SEC 开头的密钥），
+完成后拿到 Webhook 地址。
+
+### 9.2 配置 → 构建 → 部署
+
+```bash
+# ① 把 Webhook 和加签密钥填进 k8s-watcher/deploy.yaml：
+#    WEBHOOK_URL / DINGTALK_SECRET（留空则是 DRY-RUN，只打日志不发送）
+
+# ② 构建镜像（项目根目录）
+docker build -t supply-chain-watcher:latest ./k8s-watcher
+
+# ③ 部署（先授权、再部署，顺序不能反）
+kubectl apply -f k8s-watcher/rbac.yaml
+kubectl apply -f k8s-watcher/deploy.yaml
+
+# ④ 确认日志出现「已开始监视 pods」
+kubectl logs -f deploy/supply-chain-watcher
+```
+
+### 9.3 验证与卸载
+
+```bash
+# 构造一个故意崩溃的测试 Pod，2~3 分钟后重启数超 3，钉钉群应收到告警
+kubectl run crash-test --image=docker.m.daocloud.io/library/busybox:1.36 \
+  --restart=Always -- sh -c "echo boom; exit 1"
+
+kubectl get pod crash-test -w          # 盯 RESTARTS 列（Ctrl+C 退出）
+kubectl delete pod crash-test --now    # 验证完清理
+
+# 卸载监视器
+kubectl delete -f k8s-watcher/deploy.yaml -f k8s-watcher/rbac.yaml
+```
+
+> 🔎 遇到问题查 8️⃣ 常见问题排查表末尾新增的 watcher 三行。
 
 ---
 

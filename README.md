@@ -20,6 +20,7 @@
 - [部署手册](DEPLOY_GUIDE.md)
 - [快速部署](#-快速部署)
 - [低内存服务器部署指南](#-低内存服务器部署指南2g-及以下)
+- [K8s Pod 监视器](#-k8s-pod-监视器可选组件)
 - [本地开发](#-本地开发)
 - [环境变量](#-环境变量)
 
@@ -42,6 +43,7 @@
 | 中间件 | JWT 认证 · CORS · 限流 · 请求超时 · Worker Pool |
 | 并发优化 | Goroutine + Channel（产品列表 / 产品详情并发查询） |
 | 部署 | Docker · Docker Compose · Nginx（多阶段构建 + BuildKit 缓存） |
+| 监控告警 | K8s Watcher（client-go Informer）· 钉钉机器人 Webhook |
 
 ---
 
@@ -107,6 +109,14 @@ Supply_chain_traceability/
 │   ├── vite.config.js               # Vite 配置（含 API 代理）
 │   └── package.json
 │
+├── k8s-watcher/                     # K8s Pod 重启告警监视器（可选组件）
+│   ├── main.go                      # 入口：配置加载 / 集群认证 / Informer 监听 / 去重判断
+│   ├── alert.go                     # 钉钉机器人消息发送（text 消息 + HMAC 加签）
+│   ├── Dockerfile                   # 多阶段构建 → scratch 极简镜像（约 37MB，秒级启动）
+│   ├── rbac.yaml                    # 最小权限授权（ServiceAccount + 只读 pods）
+│   ├── deploy.yaml                  # K8s Deployment（Webhook 等配置在此填写）
+│   └── go.mod                       # 独立 Go 模块（client-go v0.36，与主服务零耦合）
+│
 ├── dockerfile                       # 多阶段构建（Node → Go → Nginx，BuildKit 缓存）
 ├── docker-compose.yml               # 容器编排（MySQL + RabbitMQ + App）
 ├── nginx.conf                       # Nginx 反向代理
@@ -133,6 +143,7 @@ Supply_chain_traceability/
 - ♻️ **任务可靠投递**：手动 ACK/NACK + 自动重试 + 断线重连，服务重启任务不丢失
 - 🌐 **CORS 跨域**：开发环境 Vite 代理 + 生产环境 Nginx 反向代理
 - 🛡 **安全防护**：参数校验、SQL 注入防护（预编译）、角色权限拦截、单 IP 限流（100 req/s）
+- 🔭 **Pod 重启告警**：内置 client-go 监视器（可选组件），Pod 反复崩溃超阈值自动推送钉钉告警，详见「K8s Pod 监视器」章节
 
 ---
 
@@ -390,6 +401,85 @@ docker load -i /home/developer/supply-app.tar
 > ⚠️ **RabbitMQ 配置注意**：新版 RabbitMQ 已**弃用** `RABBITMQ_VM_MEMORY_HIGH_WATERMARK` 环境变量，
 > 设置它会直接启动失败（`deprecated environment variables detected`）。
 > 内存水位等高级配置必须用配置文件（本项目的 `rabbitmq/rabbitmq.conf`）挂载。
+
+---
+
+## 🔍 K8s Pod 监视器（可选组件）
+
+`k8s-watcher/` 是一个可选的独立组件：部署在 Kubernetes 集群里的告警哨兵。它通过 client-go 的 Informer 机制实时监听集群内所有 Pod，当某个 Pod 的容器累计重启次数**超过阈值（默认 3 次）**——即进入 CrashLoopBackOff 反复崩溃——时，自动调用钉钉群机器人推送告警。
+
+> 特点：独立 Go 模块（不增加主服务任何依赖）· scratch 极简镜像（约 37MB，毫秒级启动）· 资源占用极低（内存 16Mi 起步）· Webhook 未配置时自动进入 DRY-RUN 模式（告警只打日志、不发送），方便先验证再接入钉钉。
+
+### 前置要求
+
+- 一个可用的 Kubernetes 集群（本地推荐 **Docker Desktop**：Settings → Kubernetes → Enable Kubernetes）
+- 已安装 kubectl（Docker Desktop 自带）
+- 一个钉钉群（接收告警用）
+
+### 1. 创建钉钉机器人
+
+1. 打开钉钉群 → 群设置 → 机器人 → 添加机器人 → **自定义（通过 Webhook 接入）**
+2. 安全设置建议两项都勾：
+   - **自定义关键词**：填 `告警`（本程序的消息固定以【K8s 告警】开头，可直接命中）
+   - **加签**：记录生成的密钥（`SEC` 开头那串）
+3. 完成后会得到 **Webhook 地址**（形如 `https://oapi.dingtalk.com/robot/send?access_token=xxxx`），注意妥善保管，泄漏后任何人都能向群里发消息
+
+### 2. 配置并部署
+
+```bash
+# ① 编辑 k8s-watcher/deploy.yaml，填入两个环境变量：
+#    WEBHOOK_URL      ← 第 1 步拿到的 Webhook 地址
+#    DINGTALK_SECRET  ← 加签密钥（SEC 开头；未开启加签则留空）
+
+# ② 构建镜像（在项目根目录执行，国内网络已内置加速）
+docker build -t supply-chain-watcher:latest ./k8s-watcher
+
+# ③ 部署（先授权、再部署，顺序不能反）
+kubectl apply -f k8s-watcher/rbac.yaml
+kubectl apply -f k8s-watcher/deploy.yaml
+
+# ④ 观察日志，出现「已开始监视 pods」即部署成功
+#    若持续刷 Forbidden / 403，说明 rbac.yaml 未生效
+kubectl logs -f deploy/supply-chain-watcher
+```
+
+### 3. 验证告警
+
+部署一个故意崩溃的测试 Pod，等它反复重启超过阈值：
+
+```bash
+kubectl run crash-test --image=docker.m.daocloud.io/library/busybox:1.36 \
+  --restart=Always -- sh -c "echo boom; exit 1"
+
+# 盯 RESTARTS 列，2~3 分钟内涨到 4，钉钉群收到告警
+kubectl get pod crash-test -w
+
+# 验证完清理
+kubectl delete pod crash-test --now
+```
+
+### 配置项（k8s-watcher/deploy.yaml 的 env）
+
+| 环境变量 | 默认值 | 说明 |
+|------|------|------|
+| `WEBHOOK_URL` | 空 | 钉钉机器人 Webhook；**留空 = DRY-RUN 只打日志不发送** |
+| `DINGTALK_SECRET` | 空 | 加签密钥（SEC 开头）；机器人未开启加签则留空 |
+| `RESTART_THRESHOLD` | `3` | 重启次数阈值，**超过**该值才告警 |
+| `NAMESPACE` | 空（全部） | 只监视指定命名空间时填写 |
+
+### 告警行为说明
+
+- **去重防抖**：同一 Pod 不会反复刷屏——每再多崩满一个阈值次数（4 → 7 → 10…）才再报一次；Pod 被删除后状态自动清理
+- **失败自动重试**：钉钉发送失败（网络抖动等）会在下个同步周期（60 秒）自动重试，无需干预
+- **已完结 Pod 不告警**：Job 类正常跑完的 Pod（Succeeded/Failed）自动跳过
+- **重启口径**：与 `kubectl get pods` 的 RESTARTS 列一致（不含 init 容器），方便核对
+
+### 卸载
+
+```bash
+kubectl delete -f k8s-watcher/deploy.yaml
+kubectl delete -f k8s-watcher/rbac.yaml
+```
 
 ---
 

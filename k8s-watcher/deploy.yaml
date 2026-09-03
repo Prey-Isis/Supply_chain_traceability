@@ -1,0 +1,69 @@
+# ============================================================================
+# supply-chain-watcher 的部署清单（Deployment）
+# ----------------------------------------------------------------------------
+# K8s 名词速查（新手版）：
+#   Deployment : 声明"我要跑一个什么样的程序"。K8s 会自动创建/重启 Pod 来
+#                维持期望状态——程序崩溃自动拉起、更新镜像自动滚动替换。
+#   Pod        : K8s 中运行容器的最小单元（本例一个 Pod = 一个容器）。
+#   namespace  : 资源的逻辑分组（类似文件夹），不指定就是 default。
+#
+# 部署命令（按顺序）：
+#   kubectl apply -f rbac.yaml    # 先授权
+#   kubectl apply -f deploy.yaml  # 再部署
+#   kubectl logs -f deploy/supply-chain-watcher
+#
+# ⚠️ 部署前必须把 WEBHOOK_URL 填上（获取方式见 README「K8s Pod 监视器」），
+#    留空则是 DRY-RUN 模式：告警只打印到日志、不发钉钉。
+# ============================================================================
+apiVersion: apps/v1          # Deployment 资源所属的 API 版本组
+kind: Deployment
+metadata:
+  name: supply-chain-watcher
+  namespace: default
+  labels:
+    app: supply-chain-watcher
+spec:
+  replicas: 1  # 单实例：informer 全量 watch，多副本会重复告警
+  selector:
+    matchLabels:
+      app: supply-chain-watcher
+  template:
+    metadata:
+      labels:
+        app: supply-chain-watcher
+    spec:
+      # 使用 rbac.yaml 里定义的身份。没有这行，Pod 以默认身份访问 API
+      # 会被拒绝，日志持续报 Forbidden。
+      serviceAccountName: supply-chain-watcher
+      containers:
+      - name: watcher
+        image: supply-chain-watcher:latest
+        # Docker Desktop 的 K8s 与本地 Docker 共享镜像存储：docker build
+        # 出来的镜像集群直接可见。IfNotPresent = 本地有就用本地；
+        # 默认值 Absent 会尝试去远端仓库拉取，本地镜像名会直接报错。
+        imagePullPolicy: IfNotPresent
+        env:
+        # ── 部署前必填 ────────────────────────────────────────────────
+        # 钉钉机器人 Webhook，形如：
+        #   https://oapi.dingtalk.com/robot/send?access_token=xxxxxx
+        # 获取方式见 README「K8s Pod 监视器」章节。
+        # 留空 = DRY-RUN：告警只打印到日志不发送（可用于功能验证）。
+        - name: WEBHOOK_URL
+          value: ""
+        # 机器人安全设置开了"加签"才填（SEC 开头的密钥），否则留空。
+        - name: DINGTALK_SECRET
+          value: ""
+        # ── 可选项 ────────────────────────────────────────────────────
+        - name: RESTART_THRESHOLD
+          value: "3"   # 重启次数阈值，"超过"该值才告警
+        - name: NAMESPACE
+          value: ""    # 空 = 监视全部命名空间；也可指定如 "default"
+        # 资源限制：watcher 非常轻量（几十个 Pod 的规模十几 MB 内存足够）。
+        # requests 是调度保证值，limits 是硬上限（超过会被 OOMKill）。
+        resources:
+          requests:
+            cpu: 5m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi

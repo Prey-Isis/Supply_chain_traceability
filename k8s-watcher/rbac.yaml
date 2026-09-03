@@ -1,0 +1,51 @@
+# ============================================================================
+# supply-chain-watcher 的 RBAC 授权清单
+# ----------------------------------------------------------------------------
+# 背景（新手版）：watcher 要调用 K8s API 服务器查询所有 Pod 的状态。
+# K8s 的 API 不是随便谁都能调的，必须回答两个问题——"你是谁"（认证）
+# 和"你被允许做什么"（授权）。本文件解决这两件事，由三部分组成：
+#
+#   ServiceAccount（SA）—— Pod 的"工牌"。
+#       给程序用的账号（区别于真人用户的 User）。部署时在 deploy.yaml 里
+#       通过 serviceAccountName: supply-chain-watcher 把工牌发给 Pod，
+#       K8s 会自动往 Pod 里注入这个身份的访问令牌（token 文件）。
+#
+#   ClusterRole —— "门禁规则"，声明允许对什么资源做什么操作。
+#       Cluster 前缀表示规则写在集群层面、对全部命名空间生效
+#       （因为 watcher 默认监听所有命名空间）。
+#
+#   ClusterRoleBinding —— 把"工牌"和"门禁规则"绑在一起生效。
+#
+# ⚠️ 如果部署时漏掉本文件（或没 apply），watcher 启动后会持续打
+#    Forbidden / 403 日志——这是排查权限问题的入口。
+# ============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: supply-chain-watcher
+  namespace: default        # SA 属于某个命名空间，和 deploy.yaml 保持一致
+---
+# 最小权限原则：informer 的工作方式是 List（全量拉一次）+ Watch（持续订阅），
+# 所以只需要 pods 的 get/list/watch 三个只读动词，不授予任何写权限。
+# 即使 watcher 程序被攻破，攻击面也被限制在"看 Pod"这一件事上。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: supply-chain-watcher
+rules:
+- apiGroups: [""]           # "" 表示核心 API 组（Pod、Service 等基础资源都在这组）
+  resources: ["pods"]       # 只碰 pods，不碰 secrets/nodes 等敏感资源
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: supply-chain-watcher
+roleRef:                    # 绑哪条规则
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: supply-chain-watcher
+subjects:                   # 绑哪张工牌
+- kind: ServiceAccount
+  name: supply-chain-watcher
+  namespace: default
