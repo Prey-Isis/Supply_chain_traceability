@@ -145,6 +145,15 @@ func (wp *WorkerPool) workerLoop(workerID int) {
 			break
 		}
 
+		// ★ 先确保 MQ 连接可用（初始连接失败 / 断线后由这里负责重新拨号）
+		//   没有这一步：启动时 MQ 未就绪 → 首次 Connect 失败 → watchConnection 从未启动
+		//   → Consume 永远拿不到 Channel → Worker 空转，MQ 侧也看不到任何连接尝试
+		if err := wp.mqClient.EnsureConnected(); err != nil {
+			log.Printf("[Worker-%d] ⚠️ MQ 未连接: %v，5 秒后重试...\n", workerID, err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
 		err := wp.mqClient.Consume(workerID, func(msg mq.TaskMessage) error {
 			return wp.handleMessage(msg)
 		})

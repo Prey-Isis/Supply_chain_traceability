@@ -71,7 +71,9 @@ services:
       # SSH 隧道访问：ssh -L 15672:localhost:15672 root@服务器IP
       - "127.0.0.1:15672:15672"
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # 必须用 check_port_connectivity（探测 5672 端口真实可连）：
+      # ping 在 Erlang 节点起来但 AMQP 端口未监听时就会误报 healthy，导致 app 抢跑被拒
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s
       timeout: 5s
       retries: 5

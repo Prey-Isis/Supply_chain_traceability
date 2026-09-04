@@ -273,7 +273,7 @@ func initTaskWorker() {
 
 	if err := mqClient.Connect(); err != nil {
 		// MQ 连不上不 panic，降级模式运行（任务投递会失败，只记日志）
-		// MQ 恢复后 watchConnection 会自动重连
+		// MQ 恢复后由 Worker 循环的 EnsureConnected 自动重新拨号
 		log.Printf("⚠️  RabbitMQ 连接失败（降级模式运行，任务投递将被跳过）: %v\n", err)
 		// 注意：不 return，继续创建 Pool，MQ 恢复后自动可用
 	}

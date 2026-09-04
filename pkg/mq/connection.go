@@ -67,6 +67,7 @@ type Client struct {
 
 	// ----- 生命周期 -----
 	closed    bool        // 是否已主动关闭（主动关闭后不再重连）
+	watching  bool        // 是否已有重连监听 goroutine 在跑（防止重复启动堆积）
 	closeChan chan struct{} // 通知后台 goroutine 退出的信号
 }
 
@@ -185,10 +186,35 @@ func (c *Client) Connect() error {
 	log.Println("[MQ] ✅ RabbitMQ 连接成功，交换机/队列已声明")
 
 	// ----- 第 6 步：启动断线重连监听 -----
-	// 在后台 goroutine 中监听连接断开事件，断了就自动重连
-	go c.watchConnection()
+	// 在后台 goroutine 中监听连接断开事件，断了就自动重连。
+	// 只启动一次（watching 防重复）：重连成功再次走到这里时，监听还在跑，不新开
+	if !c.watching {
+		c.watching = true
+		go c.watchConnection()
+	}
 
 	return nil
+}
+
+// EnsureConnected 确保连接可用：连接不存在或已断开时重新拨号
+//
+// 【为什么需要它？】
+//   watchConnection 只在"连接成功过一次"之后才开始监听断线。
+//   如果程序启动时 MQ 还没就绪（首次连接失败，降级模式），没有任何人负责重拨——
+//   Worker 反复重试消费、却永远等不到连接。
+//   这个方法补上这一环：Worker 每轮重试前先调它，没连接就真正拨号。
+func (c *Client) EnsureConnected() error {
+	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return fmt.Errorf("MQ 客户端已关闭")
+	}
+	available := c.conn != nil && !c.conn.IsClosed() && c.ch != nil && !c.ch.IsClosed()
+	c.mu.RUnlock()
+	if available {
+		return nil
+	}
+	return c.Connect()
 }
 
 // ============================================================
@@ -207,6 +233,13 @@ func (c *Client) Connect() error {
 //   生产环境更讲究的做法是指数退避（1s → 2s → 4s → 8s...），
 //   防止 MQ 宕机时疯狂重连打爆服务器。
 func (c *Client) watchConnection() {
+	// 退出时复位 watching，允许未来重新启动监听
+	defer func() {
+		c.mu.Lock()
+		c.watching = false
+		c.mu.Unlock()
+	}()
+
 	for {
 		c.mu.RLock()
 		conn := c.conn
