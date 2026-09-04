@@ -33,7 +33,9 @@ services:
       - --default-time-zone=+08:00
       - --default-authentication-plugin=mysql_native_password
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-SupplyChain@2024}"]
+      # 必须用 127.0.0.1 强制走 TCP：首次初始化期间 MySQL 只有 socket（3306 未监听），
+      # 用 localhost 会在初始化未完成时误报 healthy，导致 app 抢跑连接被拒
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-SupplyChain@2024}"]
       interval: 10s
       timeout: 5s
       retries: 5
