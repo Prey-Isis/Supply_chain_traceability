@@ -79,6 +79,7 @@ services:
 
   # 应用服务（Go 后端 + Nginx 前端）
   app:
+    image: supply-chain-app:latest
     build:
       context: .
       dockerfile: dockerfile
