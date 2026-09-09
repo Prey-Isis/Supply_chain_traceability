@@ -13,3 +13,6 @@ Thumbs.db
 
 # IDE
 .idea/
+
+# K8s 本地凭据（含密码，绝对不能提交；模板见 k8s/secret.yaml.example）
+k8s/secret.yaml

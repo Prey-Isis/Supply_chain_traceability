@@ -1,0 +1,145 @@
+# ============================================================================
+# 供应链溯源系统应用（Go 后端 + Nginx 前端）的部署清单
+# ----------------------------------------------------------------------------
+# 【和 docker-compose 的关系】
+#   compose 版给云服务器用；这个 yaml 版跑在本机 Docker Desktop 内置 K8s 里，
+#   让 k8s-watcher 能像监视其他 Pod 一样监视它（重启次数超 3 次发钉钉告警）。
+#
+# 【镜像哪来的？】
+#   image: supply-chain-app:latest 是本机 docker build 出来的镜像。
+#   Docker Desktop 的 K8s 和 Docker 共用同一个镜像库，
+#   所以 imagePullPolicy: IfNotPresent（本地有就用，不去网上拉）可以直接跑。
+#
+# 【为什么探针打 8080 而 Service 转发 80？】
+#   容器里有两个进程：Go 后端监听 8080，Nginx 监听 80（反代 /api 到 8080、
+#   托管前端静态文件）。健康检查直打 8080/health（绕过 Nginx，只测 Go 本身）；
+#   用户访问走 Service 的 NodePort → Nginx 的 80，和 compose 一样能看页面。
+#
+# 【自愈和告警怎么发生？】
+#   livenessProbe 每 15 秒戳一次 8080/health，连续 3 次失败（比如 Go 进程
+#   死锁、内存耗尽假死）→ K8s 杀掉容器重启 → restartCount+1 →
+#   累计超 3 次 → watcher 发钉钉。这就是"Running 但内部已死"的自动修复。
+#
+# 部署命令（按顺序，前面的 Pod Running 之后再执行下一条）：
+#   kubectl apply -f k8s/secret.yaml
+#   kubectl apply -f k8s/mysql.yaml
+#   kubectl apply -f k8s/rabbitmq.yaml
+#   kubectl get pods -w                 # 等 mysql / rabbitmq 都 Running
+#   kubectl apply -f k8s/app.yaml
+#   kubectl logs -f deploy/supply-chain-app
+#
+# 访问地址：http://localhost:30080/supply_chain  （测试账号 11111111 / 123456）
+#
+# 【自愈演示】杀掉容器主进程，K8s 会自动重启容器（restartCount+1）：
+#   kubectl exec deploy/supply-chain-app -- /bin/sh -c "kill 1"
+#   kubectl get pod -l app=supply-chain-app -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}'
+# ============================================================================
+apiVersion: apps/v1          # Deployment 资源所属的 API 版本组
+kind: Deployment
+metadata:
+  name: supply-chain-app
+  namespace: default
+  labels:
+    app: supply-chain-app
+spec:
+  replicas: 1                # 单实例演示环境；扩副本需先解决 MySQL 单点
+  selector:
+    matchLabels:
+      app: supply-chain-app
+  template:
+    metadata:
+      labels:
+        app: supply-chain-app
+    spec:
+      containers:
+      - name: app
+        image: supply-chain-app:latest   # 本机构建的镜像（含 MQ 重连修复）
+        imagePullPolicy: IfNotPresent    # 本地有镜像就别去 Docker Hub 拉
+        ports:
+        - containerPort: 80    # Nginx：前端页面 + /api 反代入口
+        - containerPort: 8080  # Go 后端：探针直连用
+        env:
+        # ---- 常量：服务发现用 K8s Service 名（代替 compose 的服务名）----
+        - name: DB_HOST
+          value: mysql                 # k8s/mysql.yaml 里 Service 的名字
+        - name: DB_PORT
+          value: "3306"
+        - name: DB_USER
+          value: root
+        - name: DB_NAME
+          value: supply_chain
+        - name: MQ_HOST
+          value: rabbitmq              # k8s/rabbitmq.yaml 里 Service 的名字
+        - name: MQ_PORT
+          value: "5672"
+        - name: GIN_MODE
+          value: release
+        - name: TZ
+          value: Asia/Shanghai
+        # ---- 敏感信息：从 Secret 注入（值在 k8s/secret.yaml 里）----
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: supply-chain-secret
+              key: MYSQL_ROOT_PASSWORD
+        - name: MQ_USER
+          valueFrom:
+            secretKeyRef:
+              name: supply-chain-secret
+              key: RABBITMQ_USER
+        - name: MQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: supply-chain-secret
+              key: RABBITMQ_PASSWORD
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: supply-chain-secret
+              key: JWT_SECRET
+        # ---- startupProbe：启动宽限期 ----
+        # Go 启动要连 MySQL（连不上会退出），给 60 秒宽限（3 秒 × 20 次）。
+        # 宽限期内 livenessProbe 不生效，避免"还在启动就被误杀重启"死循环。
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          periodSeconds: 3
+          failureThreshold: 20
+        # ---- livenessProbe：自愈开关（核心告警触发点）----
+        # 启动完成后每 15 秒探一次，连续失败 3 次 → K8s 杀容器重启。
+        # 反复崩溃时 restartCount 持续增长，watcher 就会发渐进告警。
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          periodSeconds: 15
+          failureThreshold: 3
+        resources:
+          requests:              # 保底资源：调度时给这个 Pod 预留
+            memory: "128Mi"
+            cpu: "100m"
+          limits:                # 上限：和 compose 的 mem_limit: 512m 对齐
+            memory: "512Mi"
+            cpu: "500m"
+---
+# Service：给这组 Pod 一个稳定的访问入口
+# type: LoadBalancer：Docker Desktop 内置了 LB 转发，会自动把 Service 端口
+# 映射到本机（外部 IP 显示 pending 是正常的，不影响 localhost 访问）。
+# Service 端口直接用 30080（而非常规的 80），避免和 compose 版占用的 80 冲突，
+# 两套可以同时跑。访问 http://localhost:30080/supply_chain。
+apiVersion: v1
+kind: Service
+metadata:
+  name: supply-chain-app
+  namespace: default
+  labels:
+    app: supply-chain-app
+spec:
+  type: LoadBalancer
+  selector:
+    app: supply-chain-app
+  ports:
+  - name: http
+    port: 30080        # Service 端口 = 本机访问端口（localhost:30080）
+    targetPort: 80     # 转发到 Pod 里 Nginx 的 80

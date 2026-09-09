@@ -1,0 +1,187 @@
+# ============================================================================
+# MySQL 的 K8s 部署清单（本机 Docker Desktop K8s）
+# ----------------------------------------------------------------------------
+# 【部署顺序】本文件要在 secret.yaml 之后、app.yaml 之前执行：
+#   kubectl apply -f secret.yaml
+#   kubectl apply -f mysql.yaml      ← 本文件
+#   kubectl apply -f rabbitmq.yaml
+#   kubectl get pods -w              # 等 mysql 变 Running 再部署 app
+#   kubectl apply -f app.yaml
+#
+# 【本文件包含 4 种资源】（新手名词速查）
+#   ConfigMap : 存配置文件的资源。这里放 init.sql，首次启动时挂进 MySQL 容器
+#               的 /docker-entrypoint-initdb.d/，MySQL 只在数据目录为空时执行它。
+#   PVC       : PersistentVolumeClaim 持久卷声明 = "我要一块持久磁盘存数据"。
+#               Docker Desktop 自带 hostpath 存储类，申请即得。Pod 重建数据不丢。
+#   Deployment: 声明"我要跑一个什么样的容器"，Pod 挂了自动拉起。
+#   Service   : 一组 Pod 的固定访问地址。app 容器连 "mysql:3306" 就是连到这。
+#
+# 【探针（Probe）为什么用 TCP 而不是 mysqladmin ping？】
+#   MySQL 首次初始化（建库+导 init.sql）期间用的是临时服务，只有 socket、
+#   没开 3306 端口。socket 方式的 ping 会提前"误报健康"（compose 里踩过的坑）。
+#   tcpSocket 探测 3306，端口没开就是没就绪，判定最准确。
+#   startupProbe 给足 150 秒宽限（30次 × 5秒），初始化再慢也不会被误杀。
+# ============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-init-sql
+  namespace: default
+data:
+  init.sql: |
+    -- ============================================================
+    -- 供应链溯源系统 - 数据库初始化脚本（合并版）
+    -- MySQL 容器首次启动时自动执行
+    -- ============================================================
+
+    SET NAMES utf8mb4;
+    SET FOREIGN_KEY_CHECKS = 0;
+
+    -- ==================== 用户表 ====================
+    DROP TABLE IF EXISTS `user`;
+    CREATE TABLE `user`  (
+      `id` int(11) NOT NULL AUTO_INCREMENT,
+      `username` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `account` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `password` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `role` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (`id`) USING BTREE,
+      UNIQUE INDEX `only`(`username` ASC, `account` ASC) USING BTREE
+    ) ENGINE = InnoDB AUTO_INCREMENT = 6 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = Dynamic;
+
+    -- ==================== 产品表 ====================
+    -- product_id 已从 int 改为 varchar(25)，与 Go Model 的 string 类型一致
+    DROP TABLE IF EXISTS `product`;
+    CREATE TABLE `product`  (
+      `product_id` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `name` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `current_holder` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `status` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (`product_id`) USING BTREE
+    ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = Dynamic;
+
+    -- ==================== 供应链历史表 ====================
+    -- product_id 已从 int 改为 varchar(25)，外键同步更新
+    DROP TABLE IF EXISTS `supply_history`;
+    CREATE TABLE `supply_history`  (
+      `id` int(11) NOT NULL AUTO_INCREMENT,
+      `product_id` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `product_name` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `node_name` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `location` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `action` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `operation_role` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `description` varchar(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+      `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (`id`) USING BTREE,
+      INDEX `product_id`(`product_id` ASC) USING BTREE,
+      CONSTRAINT `product_id` FOREIGN KEY (`product_id`) REFERENCES `product` (`product_id`) ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE = InnoDB AUTO_INCREMENT = 14 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = Dynamic;
+
+    -- ==================== 种子数据 ====================
+    -- 管理员测试账号: 11111111 / 123456
+    INSERT INTO `user` (`username`, `account`, `password`, `role`) VALUES
+    ('11111111', '11111111', '123456', 'admin');
+
+    SET FOREIGN_KEY_CHECKS = 1;
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce          # 单节点读写（本地单机足够）
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: default
+  labels:
+    app: mysql
+spec:
+  replicas: 1
+  # ★ Recreate：先杀旧 Pod 再起新 Pod。因为 PVC 是 ReadWriteOnce（同一时刻
+  #   只能被一个 Pod 挂载），默认的滚动更新会让新旧 Pod 并存、新 Pod 抢不到卷
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: docker.m.daocloud.io/library/mysql:8.0
+        # args 追加到镜像入口后面，等价于 compose 里的 command 参数
+        args:
+          - --character-set-server=utf8mb4
+          - --collation-server=utf8mb4_unicode_ci
+          - --default-time-zone=+08:00
+          - --default-authentication-plugin=mysql_native_password
+        ports:
+          - containerPort: 3306
+        env:
+          - name: MYSQL_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: supply-chain-secret
+                key: MYSQL_ROOT_PASSWORD
+          - name: MYSQL_DATABASE
+            value: supply_chain
+          - name: TZ
+            value: Asia/Shanghai
+        volumeMounts:
+          - name: data
+            mountPath: /var/lib/mysql          # 数据目录 → 持久卷
+          - name: init-sql
+            mountPath: /docker-entrypoint-initdb.d   # 首次启动自动执行
+        resources:
+          requests:
+            memory: 256Mi
+          limits:
+            memory: 768Mi
+        # ---- 就绪宽限：首次初始化最长 150 秒，期间 3306 未开不会误判 ----
+        startupProbe:
+          tcpSocket:
+            port: 3306
+          periodSeconds: 5
+          failureThreshold: 30
+        # ---- 存活探针：3306 连不上（进程死了）就重启容器 ----
+        livenessProbe:
+          tcpSocket:
+            port: 3306
+          periodSeconds: 10
+          failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mysql-data
+        - name: init-sql
+          configMap:
+            name: mysql-init-sql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql          # app 容器里 DB_HOST=mysql 连的就是这个名字
+  namespace: default
+spec:
+  type: ClusterIP      # 仅集群内部访问，不暴露端口到宿主机（和 compose 的 127.0.0.1:3306 同等安全性）
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+      targetPort: 3306
