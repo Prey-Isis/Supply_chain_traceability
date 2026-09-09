@@ -20,6 +20,8 @@
 - [部署手册](DEPLOY_GUIDE.md)
 - [快速部署](#-快速部署)
 - [低内存服务器部署指南](#-低内存服务器部署指南2g-及以下)
+- [两种部署方式怎么选](#-两种部署方式怎么选)
+- [本机 K8s 部署](#-本机-k8s-部署内存充裕时)
 - [K8s Pod 监视器](#-k8s-pod-监视器可选组件)
 - [本地开发](#-本地开发)
 - [环境变量](#-环境变量)
@@ -42,7 +44,7 @@
 | 消息队列 | RabbitMQ（异步任务：审计日志 / 状态同步 / 统计刷新） |
 | 中间件 | JWT 认证 · CORS · 限流 · 请求超时 · Worker Pool |
 | 并发优化 | Goroutine + Channel（产品列表 / 产品详情并发查询） |
-| 部署 | Docker · Docker Compose · Nginx（多阶段构建 + BuildKit 缓存） |
+| 部署 | Docker · Docker Compose · Nginx（多阶段构建 + BuildKit 缓存）· K8s（本机 Docker Desktop，可选） |
 | 监控告警 | K8s Watcher（client-go Informer）· 钉钉机器人 Webhook |
 
 ---
@@ -116,6 +118,13 @@ Supply_chain_traceability/
 │   ├── rbac.yaml                    # 最小权限授权（ServiceAccount + 只读 pods）
 │   ├── deploy.yaml                  # K8s Deployment（Webhook 等配置在此填写）
 │   └── go.mod                       # 独立 Go 模块（client-go v0.36，与主服务零耦合）
+│
+├── k8s/                             # 本机 K8s 部署清单（Docker Desktop 内置集群，可选）
+│   ├── mysql.yaml                   # ConfigMap(init.sql) + PVC + Deployment + Service
+│   ├── rabbitmq.yaml                # ConfigMap(内存水位) + PVC + Deployment + Service
+│   ├── app.yaml                     # 应用 Deployment（livenessProbe 自愈）+ LoadBalancer
+│   ├── secret.yaml.example          # 密钥模板（复制为 secret.yaml 使用，不进仓库）
+│   └── secret.yaml                  # 本地凭据（已被 .gitignore 排除）
 │
 ├── dockerfile                       # 多阶段构建（Node → Go → Nginx，BuildKit 缓存）
 ├── docker-compose.yml               # 容器编排（MySQL + RabbitMQ + App）
@@ -195,6 +204,9 @@ Supply_chain_traceability/
 ---
 
 ## 🚀 快速部署
+
+> 🧭 **部署方式选择**：本节走 Docker Compose，适合 2G 内存云服务器；
+> 内存充裕的本机可走 K8s 部署（支持监视告警 + 探针自愈），见「[本机 K8s 部署](#-本机-k8s-部署内存充裕时)」。
 
 ### 前置要求
 
@@ -401,6 +413,100 @@ docker load -i /home/developer/supply-app.tar
 > ⚠️ **RabbitMQ 配置注意**：新版 RabbitMQ 已**弃用** `RABBITMQ_VM_MEMORY_HIGH_WATERMARK` 环境变量，
 > 设置它会直接启动失败（`deprecated environment variables detected`）。
 > 内存水位等高级配置必须用配置文件（本项目的 `rabbitmq/rabbitmq.conf`）挂载。
+
+---
+
+## 🧭 两种部署方式怎么选
+
+| | 🐌 Compose 版（单机容器） | 🧩 K8s 版（本机内置集群） |
+|---|---|---|
+| 适用环境 | **2G 内存云服务器**（构建 + 运行全程省内存） | **内存充裕的本机**（16G 开发电脑） |
+| 编排文件 | `docker-compose.yml` | `k8s/*.yaml` |
+| 访问地址 | `http://IP/`（80 端口） | `http://localhost:30080/supply_chain/` |
+| 监视告警 | 无（watcher 只能跑在 K8s 里） | ✅ k8s-watcher 自动监视 + 钉钉告警 |
+| 故障自愈 | 容器级（`restart: always`，进程挂了才重启） | ✅ 容器级 + **应用级**（livenessProbe 探活，"Running 但内部已死"也能自动重启） |
+| 数据存储 | Docker 数据卷 | PVC（独立存储，与 compose 的数据卷互不影响） |
+
+> 一句话：**服务器内存紧张 → Compose；本机要监视告警 / 想学 K8s → K8s 版**。
+> 两套可以同时存在（K8s 用 30080 端口，不与 Compose 的 80 冲突），互不影响。
+
+---
+
+## 🧩 本机 K8s 部署（内存充裕时）
+
+把整套系统部署进 Docker Desktop 内置的 Kubernetes 集群，变成真正的 Pod：
+现有 k8s-watcher **零改动**即可监视这 3 个 Pod；应用反复崩溃时超 3 次自动推送钉钉告警。
+
+### 前置要求
+
+- Docker Desktop：Settings → Kubernetes → **Enable Kubernetes**（左下角图标变绿即就绪）
+- kubectl（Docker Desktop 自带，无需另装）
+- 应用镜像已在本地构建（K8s 与 Docker 共用镜像库，直接可用）：
+
+```bash
+docker build -t supply-chain-app:latest .
+```
+
+### 1. 准备密钥文件（本机执行）
+
+```bash
+cp k8s/secret.yaml.example k8s/secret.yaml
+# 按需修改密码（本地开发用默认值即可）
+# 该文件已被 .gitignore 排除，不会提交到 GitHub
+```
+
+### 2. 按顺序部署
+
+```bash
+kubectl apply -f k8s/secret.yaml     # ① 密钥
+kubectl apply -f k8s/mysql.yaml      # ② 数据库（首次初始化约 1 分钟）
+kubectl apply -f k8s/rabbitmq.yaml   # ③ 消息队列
+kubectl get pods -w                  # ④ 等 mysql / rabbitmq 都 Running（Ctrl+C 退出）
+kubectl apply -f k8s/app.yaml        # ⑤ 应用
+```
+
+### 3. 验证
+
+```bash
+kubectl get pods        # 4 个 Pod（3 个系统 Pod + watcher）应全部 Running
+
+# 登录接口测试（应返回 token）
+curl -s -X POST http://localhost:30080/supply_chain/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"account":"11111111","password":"123456"}'
+```
+
+浏览器访问 `http://localhost:30080/supply_chain/`，管理员账号 `11111111 / 123456`。
+
+### 4. 监视告警与自愈
+
+- 部署完成后 k8s-watcher **自动**把这 3 个 Pod 纳入监视（它监听全部命名空间，无需任何配置）
+- 应用内置 livenessProbe：每 15 秒探测一次 `/health`，连续 3 次失败 → K8s 自动杀容器重启（自愈）；
+  重启次数累计超 3 → 钉钉群收到【K8s 告警】
+- 手动验证一次完整链路：
+
+```bash
+# 杀掉容器主进程 → K8s 自动重启（Git Bash 需加 MSYS_NO_PATHCONV=1 前缀）
+kubectl exec deploy/supply-chain-app -- /bin/sh -c "kill 1"
+kubectl get pods -l app=supply-chain-app -w   # 观察重启次数 +1 后恢复 Running
+```
+
+### 5. 关停与释放资源
+
+| 方式 | 命令 / 操作 | 数据 | 适用场景 |
+|------|------------|------|---------|
+| 临时关停应用 | `kubectl scale deployment/mysql deployment/rabbitmq deployment/supply-chain-app --replicas=0` | ✅ 保留 | 只暂停一段时间（恢复把 `0` 改回 `1`） |
+| 退出 Docker Desktop | 托盘图标右键 → **Quit Docker Desktop** | ✅ 保留 | **推荐**：彻底释放全部内存，下次打开自动恢复 |
+| 彻底删除（含数据） | `kubectl delete -f k8s/app.yaml -f k8s/rabbitmq.yaml -f k8s/mysql.yaml -f k8s/secret.yaml` | ❌ 连数据库一起删 | 不再需要时（下次重新走部署流程） |
+
+> ⚠️ `kubectl delete -f` 会连 PVC（数据库数据）一起删除。只想删应用、保留数据：
+> `kubectl delete deploy/mysql deploy/rabbitmq deploy/supply-chain-app svc/mysql svc/rabbitmq svc/supply-chain-app`
+
+### 已踩过的坑（yaml 注释里有详细说明）
+
+1. **NodePort 在新版 Docker Desktop（kind 架构）不转发到 localhost** → Service 改用 `LoadBalancer` 类型（Docker Desktop 原生支持），已写入 `k8s/app.yaml`
+2. **exec 探针默认超时仅 1 秒**，`rabbitmq-diagnostics -q ping` 执行要 1 秒以上，会被反复误杀重启 → 必须显式 `timeoutSeconds: 5`（已写入 `k8s/rabbitmq.yaml`）
+3. MySQL 首次初始化约 1 分钟，`startupProbe` 提供了 150 秒宽限期，宽限期内不会被 livenessProbe 误杀
 
 ---
 

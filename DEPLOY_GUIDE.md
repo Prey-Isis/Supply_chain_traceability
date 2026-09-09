@@ -14,6 +14,10 @@
 4. 命令均为**幂等**设计，重复执行不会破坏环境
 
 > ⚠️ **前置要求**：需要已安装 Docker 和 Docker Compose（V2）。
+>
+> 🧭 **两种部署方式**：本手册 0️⃣~8️⃣ 走 **Docker Compose**（适合 2G 内存云服务器）；
+> 内存充裕的本机（16G 开发电脑）可走 **K8s 部署**（第 🔟 节），支持 k8s-watcher 监视告警 + 探针自动重启（自愈）。
+> 两套互不冲突，可按机器情况各选其一。
 
 ---
 
@@ -345,6 +349,10 @@ docker load -i /home/developer/supply-app.tar
 | watcher 日志持续报 Forbidden / 403 | `k8s-watcher/rbac.yaml` 未部署或 ServiceAccount 名不匹配 | `kubectl apply -f k8s-watcher/rbac.yaml` |
 | watcher Pod ImagePullBackOff | 本地镜像未构建 | 先执行 `docker build -t supply-chain-watcher:latest ./k8s-watcher` |
 | Pod 超阈值但钉钉收不到 | 关键词不匹配 / 加签错误 / Webhook 留空（DRY-RUN） | 日志搜 `errcode`（310000 = 安全校验失败）；确认 deploy.yaml 已填 URL；机器人关键词需包含「告警」 |
+| K8s 版 `localhost:30080` 连接被拒 | Service 类型不是 LoadBalancer（新版 Docker Desktop 的 kind 架构不转发 NodePort 到 localhost） | 确认 `k8s/app.yaml` 的 Service 是 `type: LoadBalancer` 后重新 apply |
+| K8s 版 rabbitmq Pod 重启数持续上涨 | exec 探针默认超时仅 1 秒，`rabbitmq-diagnostics -q ping` 跑不完被误杀 | `k8s/rabbitmq.yaml` 已设 `timeoutSeconds: 5`，重新 `kubectl apply -f k8s/rabbitmq.yaml` |
+| K8s 版 app Pod ImagePullBackOff | 本地没构建应用镜像 | `docker build -t supply-chain-app:latest .`（K8s 与 Docker 共用镜像库） |
+| Git Bash 执行 `kubectl exec` 报 exec: "C:/Program Files/..." | Git Bash 的 MSYS 路径转换把 `/bin/sh` 改写成了 Windows 路径 | 命令前加 `MSYS_NO_PATHCONV=1` |
 
 ---
 
@@ -394,6 +402,84 @@ kubectl delete -f k8s-watcher/deploy.yaml -f k8s-watcher/rbac.yaml
 ```
 
 > 🔎 遇到问题查 8️⃣ 常见问题排查表末尾新增的 watcher 三行。
+
+---
+
+## 🆕 🔟 本机 K8s 部署（内存充裕时 · 含监视告警与自愈）
+
+> 🧭 **什么时候用本节**：2G 云服务器请用前面的 Compose 流程；
+> 本机内存充裕、想要 k8s-watcher 监视告警和应用级自愈时，走本节。
+>
+> 原理：把整套系统部署进 Docker Desktop 内置的 Kubernetes 集群变成真正的 Pod——
+> watcher 零改动即可监视；应用挂了 livenessProbe 自动重启（自愈），反复崩溃超 3 次钉钉告警。
+
+### 10.1 前置检查（本机执行）
+
+```bash
+# ① Docker Desktop 已开启 Kubernetes：Settings → Kubernetes → Enable Kubernetes（左下角变绿）
+
+# ② 集群可用（应列出 Ready 的节点）
+kubectl get nodes
+
+# ③ 应用镜像已构建（K8s 与 Docker 共用镜像库，直接可用）
+docker build -t supply-chain-app:latest .
+```
+
+### 10.2 准备密钥
+
+```bash
+# 从模板复制（cmd 用 copy k8s\secret.yaml.example k8s\secret.yaml）
+cp k8s/secret.yaml.example k8s/secret.yaml
+# 按需修改密码（本地开发默认值即可）；该文件已被 .gitignore 排除，不会提交
+```
+
+### 10.3 按顺序部署
+
+```bash
+kubectl apply -f k8s/secret.yaml     # ① 密钥
+kubectl apply -f k8s/mysql.yaml      # ② 数据库（首次初始化约 1 分钟）
+kubectl apply -f k8s/rabbitmq.yaml   # ③ 消息队列
+kubectl get pods -w                  # ④ 等 mysql / rabbitmq 都 Running（Ctrl+C 退出）
+kubectl apply -f k8s/app.yaml        # ⑤ 应用
+```
+
+### 10.4 验证
+
+```bash
+kubectl get pods    # 4 个 Pod（3 个系统 Pod + watcher）应全部 Running
+
+# 登录接口测试（应返回 token）
+curl -s -X POST http://localhost:30080/supply_chain/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"account":"11111111","password":"123456"}'
+```
+
+浏览器访问 `http://localhost:30080/supply_chain/`，管理员账号 `11111111 / 123456`。
+
+### 10.5 验证监视告警与自愈（完整链路）
+
+```bash
+# 杀掉容器主进程 → K8s 自动重启容器（Git Bash 需加 MSYS_NO_PATHCONV=1）
+kubectl exec deploy/supply-chain-app -- /bin/sh -c "kill 1"
+
+# 观察重启次数 +1 后恢复 Running（重复 4 次触发钉钉告警）
+kubectl get pods -l app=supply-chain-app -w
+```
+
+重启次数累计超过 3 → watcher 推送【K8s 告警】到钉钉群；应用本身会被自动重启恢复服务。
+
+### 10.6 关停与释放资源
+
+| 方式 | 命令 / 操作 | 数据 | 适用场景 |
+|------|------------|------|---------|
+| 临时关停应用 | `kubectl scale deployment/mysql deployment/rabbitmq deployment/supply-chain-app --replicas=0` | ✅ 保留 | 只暂停一段时间（恢复把 `0` 改回 `1`） |
+| 退出 Docker Desktop | 托盘图标右键 → **Quit Docker Desktop** | ✅ 保留 | **推荐**：彻底释放全部内存，下次打开自动恢复 |
+| 彻底删除（含数据） | `kubectl delete -f k8s/app.yaml -f k8s/rabbitmq.yaml -f k8s/mysql.yaml -f k8s/secret.yaml` | ❌ 连数据库一起删 | 不再需要时（下次重新走 10.2~10.3） |
+
+> ⚠️ `kubectl delete -f` 会连 PVC（数据库数据）一起删除。只想删应用、保留数据：
+> `kubectl delete deploy/mysql deploy/rabbitmq deploy/supply-chain-app svc/mysql svc/rabbitmq svc/supply-chain-app`
+>
+> 🔎 遇到问题查 8️⃣ 常见问题排查表末尾的 K8s 四行。
 
 ---
 
